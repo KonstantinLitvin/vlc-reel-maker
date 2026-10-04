@@ -1,6 +1,6 @@
 # VLC Scene Marker
 
-A modern, object-oriented VLC media player extension written in Lua for video fragment capture, scene navigation, `.scn` file persistence, and FFmpeg video cutting.
+A modern, VLC media player extension written in Lua for video fragment capture, scene navigation, `.scn` file persistence, and FFmpeg video cutting.
 
 ---
 
@@ -31,21 +31,25 @@ Detailed documentation, component responsibilities, and class diagrams can be fo
 ```
 scene-maker/
 ├── src/
-│   └── scene-marker.lua      # Standalone extension script for VLC
+│   └── scene-marker.lua            # Standalone extension script for VLC
 ├── tests/
-│   └── test_scene_marker.lua # Standalone headless test suite
+│   └── test_scene_marker.lua       # Standalone headless test suite
 ├── scripts/
-│   └── install.sh            # Installer script for Snap & Native VLC
+│   ├── install.sh                  # Installer script for Snap & Native VLC
+│   ├── get-ffmpeg.sh               # Downloads static FFmpeg for Snap VLC
+│   └── install-ffmpeg-windows.bat  # Automated Windows FFmpeg installer
 ├── md/
-│   └── architecture.md       # Architecture specification and class diagrams
-└── README.md                 # Project documentation
+│   └── architecture.md             # Architecture specification and class diagrams
+└── README.md                       # Project documentation
 ```
 
 ---
 
 ## Installation
 
-### Linux
+### 1. Extension Installation
+
+#### Linux
 Run the installation script:
 ```bash
 ./scripts/install.sh
@@ -54,11 +58,41 @@ Or manually copy `src/scene-marker.lua` to:
 - **Snap VLC**: `~/snap/vlc/current/.local/share/vlc/lua/extensions/`
 - **Native VLC**: `~/.local/share/vlc/lua/extensions/`
 
-### Windows
+#### Windows
 Copy `src/scene-marker.lua` to:
 ```
 %APPDATA%\vlc\lua\extensions\scene-marker.lua
 ```
+
+---
+
+### 2. FFmpeg Setup (For Direct In-App Cutting)
+
+The extension provides two ways to cut videos:
+1. **Export Cut Script (`[ 📄 Export Cut Script ]`)**: Requires no setup inside VLC. Writes a batch script (`.sh` or `.bat`) next to your video that runs on your host machine.
+2. **Direct In-App Cutting (`[ ✂️ Cut Selected Scene ]`)**: Requires FFmpeg to be accessible to VLC.
+
+#### Linux (VLC Snap)
+Ubuntu Snap isolates VLC from host binaries in `/usr/bin`. Install the standalone static FFmpeg build into the Snap's shared environment with one command:
+```bash
+./scripts/get-ffmpeg.sh
+```
+
+#### Windows
+On Windows, run the automated setup script:
+```cmd
+scripts\install-ffmpeg-windows.bat
+```
+This automatically:
+- Checks if FFmpeg is already installed and in `PATH`.
+- Installs via `winget install Gyan.FFmpeg` if `winget` is available.
+- Or downloads a standalone `ffmpeg.exe` directly to `%APPDATA%\vlc\bin\ffmpeg.exe`.
+
+Alternatively, install manually via winget:
+```cmd
+winget install Gyan.FFmpeg
+```
+or place `ffmpeg.exe` into `%APPDATA%\vlc\bin\`.
 
 ---
 

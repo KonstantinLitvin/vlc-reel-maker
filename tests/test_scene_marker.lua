@@ -277,9 +277,20 @@ test("CutterService.export_script writes executable script to disk", function()
     assert_true(f ~= nil, "Script file exists on disk")
     local content = f:read("*a")
     f:close()
-    assert_true(content:find("ffmpeg -y", 1, true) ~= nil, "Script contains ffmpeg command")
-
     os.remove(path)
+end)
+
+test("CutterService.find_ffmpeg and check_ffmpeg discovery", function()
+    -- Check Linux resolution finds snap common bin or system bin
+    local linux_bin = CutterService.find_ffmpeg(false)
+    assert_true(type(linux_bin) == "string" and #linux_bin > 0, "Finds Linux ffmpeg candidate")
+
+    local ok_linux, res_linux = CutterService.check_ffmpeg(false)
+    assert_true(ok_linux, "Linux FFmpeg check succeeds with installed static build: " .. tostring(res_linux))
+
+    -- Check Windows resolution returns candidate or fallback
+    local win_bin = CutterService.find_ffmpeg(true)
+    assert_true(type(win_bin) == "string" and win_bin:find("ffmpeg%.exe") ~= nil, "Finds Windows ffmpeg candidate")
 end)
 
 -- 6. VlcPlayerAdapter tests

@@ -231,17 +231,105 @@ function CutterService.derive_output_path(video_path, scene)
     return dir .. out_name
 end
 
+--- Discover available FFmpeg executable path
+-- @param is_win boolean Optional override for testing
+-- @return string Path or command name to invoke FFmpeg
+function CutterService.find_ffmpeg(is_win)
+    if is_win == nil then is_win = Platform.is_windows end
+
+    if is_win then
+        -- Check dedicated VLC tools directory in AppData
+        local appdata = os.getenv("APPDATA")
+        if appdata then
+            local p = appdata .. "\\vlc\\bin\\ffmpeg.exe"
+            local f = io.open(p, "r")
+            if f then f:close(); return p end
+        end
+
+        -- Check WinGet standard package link
+        local localappdata = os.getenv("LOCALAPPDATA")
+        if localappdata then
+            local p = localappdata .. "\\Microsoft\\WinGet\\Links\\ffmpeg.exe"
+            local f = io.open(p, "r")
+            if f then f:close(); return p end
+        end
+
+        -- Check standard root installation
+        local p_root = "C:\\ffmpeg\\bin\\ffmpeg.exe"
+        local f_root = io.open(p_root, "r")
+        if f_root then f_root:close(); return p_root end
+
+        return "ffmpeg.exe"
+    else
+        -- Check Snap VLC common bin (shared across snap revisions)
+        local snap_common = os.getenv("SNAP_USER_COMMON")
+        if snap_common then
+            local p = snap_common .. "/bin/ffmpeg"
+            local f = io.open(p, "r")
+            if f then f:close(); return p end
+        end
+
+        local home = os.getenv("HOME")
+        if home then
+            local snap_bin = home .. "/snap/vlc/common/bin/ffmpeg"
+            local f = io.open(snap_bin, "r")
+            if f then f:close(); return snap_bin end
+
+            local local_bin = home .. "/.local/bin/ffmpeg"
+            local f2 = io.open(local_bin, "r")
+            if f2 then f2:close(); return local_bin end
+        end
+
+        local f_usr = io.open("/usr/bin/ffmpeg", "r")
+        if f_usr then f_usr:close(); return "/usr/bin/ffmpeg" end
+
+        return "ffmpeg"
+    end
+end
+
+--- Verify that FFmpeg is accessible and executable
+-- @param is_win boolean Optional override for testing
+-- @return boolean, string ok, binary_or_error
+function CutterService.check_ffmpeg(is_win)
+    if is_win == nil then is_win = Platform.is_windows end
+    local bin = CutterService.find_ffmpeg(is_win)
+
+    -- Test executing binary with -version
+    local probe_cmd
+    if is_win then
+        probe_cmd = Platform.quote(bin, true) .. " -version > NUL 2>&1"
+    else
+        probe_cmd = Platform.quote(bin, false) .. " -version > /dev/null 2>&1"
+    end
+
+    if os and os.execute then
+        local code = os.execute(probe_cmd)
+        -- In Lua 5.1/LuaJIT, os.execute returns 0 or true on success
+        if code == 0 or code == true then
+            return true, bin
+        end
+    end
+
+    if is_win then
+        return false, "FFmpeg was not found in PATH or %APPDATA%\\vlc\\bin\\. Run scripts\\install-ffmpeg-windows.bat or click 'Export Cut Script'."
+    else
+        return false, "FFmpeg was not found in VLC environment. Run ./scripts/get-ffmpeg.sh or click 'Export Cut Script'."
+    end
+end
+
 --- Build individual FFmpeg cut command
 -- Uses lossless stream copy (-c copy) with input seeking for maximum speed
-function CutterService.build_cut_command(video_path, scene, output_path, is_win)
+function CutterService.build_cut_command(video_path, scene, output_path, is_win, ffmpeg_bin)
+    local bin = ffmpeg_bin or "ffmpeg"
     local start_str = scene.start_tc:to_string(true, ".")
     local end_str   = scene.end_tc:to_string(true, ".")
     output_path = output_path or CutterService.derive_output_path(video_path, scene)
 
+    local q_bin = Platform.quote(bin, is_win)
     local q_in  = Platform.quote(video_path, is_win)
     local q_out = Platform.quote(output_path, is_win)
 
-    return string.format("ffmpeg -y -ss %s -to %s -i %s -c copy %s", start_str, end_str, q_in, q_out)
+    return string.format("%s -y -ss %s -to %s -i %s -c copy %s", q_bin, start_str, end_str, q_in, q_out)
 end
 
 --- Generate complete batch cut script for all scenes
@@ -260,7 +348,7 @@ function CutterService.generate_script(video_path, scenes, is_win)
         for _, sc in ipairs(scenes) do
             local out_path = CutterService.derive_output_path(video_path, sc)
             table.insert(lines, string.format('echo Cutting Scene %d: %s...', sc.id, sc.title))
-            table.insert(lines, CutterService.build_cut_command(video_path, sc, out_path, true))
+            table.insert(lines, CutterService.build_cut_command(video_path, sc, out_path, true, "ffmpeg"))
             table.insert(lines, "")
         end
 
@@ -278,7 +366,7 @@ function CutterService.generate_script(video_path, scenes, is_win)
         for _, sc in ipairs(scenes) do
             local out_path = CutterService.derive_output_path(video_path, sc)
             table.insert(lines, string.format('echo "Cutting Scene %d: %s..."', sc.id, sc.title))
-            table.insert(lines, CutterService.build_cut_command(video_path, sc, out_path, false))
+            table.insert(lines, CutterService.build_cut_command(video_path, sc, out_path, false, "ffmpeg"))
             table.insert(lines, "")
         end
 
@@ -326,8 +414,14 @@ function CutterService.cut_scene_async(video_path, scene, is_win)
         return false, "No scene specified"
     end
 
+    -- Verify FFmpeg binary is available before launching
+    local has_ffmpeg, bin_or_err = CutterService.check_ffmpeg(is_win)
+    if not has_ffmpeg then
+        return false, bin_or_err
+    end
+
     local out_path = CutterService.derive_output_path(video_path, scene)
-    local raw_cmd = CutterService.build_cut_command(video_path, scene, out_path, is_win)
+    local raw_cmd = CutterService.build_cut_command(video_path, scene, out_path, is_win, bin_or_err)
     local bg_cmd = Platform.bg_command(raw_cmd, nil, is_win)
 
     if os and os.execute then
