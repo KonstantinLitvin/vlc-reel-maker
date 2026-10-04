@@ -9,11 +9,11 @@
 function descriptor()
     return {
         title        = "Scene Marker",
-        version      = "1.1",
+        version      = "1.2",
         author       = "Konstantin Litvin & Antigravity",
         shortdesc    = "Fragment capture, scene navigation & cutting",
         description  = "Mark fragment start and end timestamps, export/cut via FFmpeg, save directly to .scn files, and navigate scenes.",
-        capabilities = {}
+        capabilities = { "menu" }
     }
 end
 
@@ -191,6 +191,21 @@ function Platform.bg_command(cmd, log_path, is_win)
     end
 end
 
+--- Get platform temporary log file path
+-- @param filename string Base log filename
+-- @param is_win boolean Optional override for testing
+-- @return string Full path to temporary log file
+function Platform.temp_log_path(filename, is_win)
+    if is_win == nil then is_win = Platform.is_windows end
+    if is_win then
+        local t = os.getenv("TEMP") or os.getenv("TMP") or "C:\\temp"
+        return t .. "\\" .. filename
+    else
+        local t = os.getenv("TMPDIR") or "/tmp"
+        return t .. "/" .. filename
+    end
+end
+
 --- Get script extension for current platform
 -- @param is_win boolean Optional override for testing
 function Platform.script_ext(is_win)
@@ -212,8 +227,8 @@ function CutterService.sanitize_filename(name)
     return clean ~= "" and clean or "scene"
 end
 
---- Derive output fragment filename from video path and scene
-function CutterService.derive_output_path(video_path, scene)
+--- Derive output fragment filename from video path, scene, and optional working directory
+function CutterService.derive_output_path(video_path, scene, work_dir)
     local dir, filename = video_path:match("^(.-)([^\\/]+)$")
     if not dir then
         dir = ""
@@ -228,6 +243,16 @@ function CutterService.derive_output_path(video_path, scene)
 
     local clean_title = CutterService.sanitize_filename(scene.title)
     local out_name = string.format("%s_scene_%02d_%s.%s", stem, scene.id, clean_title, ext)
+
+    if work_dir and work_dir:match("%S") then
+        work_dir = work_dir:match("^%s*(.-)%s*$")
+        local sep = (work_dir:find("\\") or Platform.is_windows) and "\\" or "/"
+        if not work_dir:match("[\\/]$") then
+            work_dir = work_dir .. sep
+        end
+        return work_dir .. out_name
+    end
+
     return dir .. out_name
 end
 
@@ -319,11 +344,11 @@ end
 
 --- Build individual FFmpeg cut command
 -- Uses lossless stream copy (-c copy) with input seeking for maximum speed
-function CutterService.build_cut_command(video_path, scene, output_path, is_win, ffmpeg_bin)
+function CutterService.build_cut_command(video_path, scene, output_path, is_win, ffmpeg_bin, work_dir)
     local bin = ffmpeg_bin or "ffmpeg"
     local start_str = scene.start_tc:to_string(true, ".")
     local end_str   = scene.end_tc:to_string(true, ".")
-    output_path = output_path or CutterService.derive_output_path(video_path, scene)
+    output_path = output_path or CutterService.derive_output_path(video_path, scene, work_dir)
 
     local q_bin = Platform.quote(bin, is_win)
     local q_in  = Platform.quote(video_path, is_win)
@@ -333,7 +358,7 @@ function CutterService.build_cut_command(video_path, scene, output_path, is_win,
 end
 
 --- Generate complete batch cut script for all scenes
-function CutterService.generate_script(video_path, scenes, is_win)
+function CutterService.generate_script(video_path, scenes, is_win, work_dir)
     if is_win == nil then is_win = Platform.is_windows end
     local lines = {}
 
@@ -346,7 +371,7 @@ function CutterService.generate_script(video_path, scenes, is_win)
         table.insert(lines, "")
 
         for _, sc in ipairs(scenes) do
-            local out_path = CutterService.derive_output_path(video_path, sc)
+            local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
             table.insert(lines, string.format('echo Cutting Scene %d: %s...', sc.id, sc.title))
             table.insert(lines, CutterService.build_cut_command(video_path, sc, out_path, true, "ffmpeg"))
             table.insert(lines, "")
@@ -364,7 +389,7 @@ function CutterService.generate_script(video_path, scenes, is_win)
         table.insert(lines, "")
 
         for _, sc in ipairs(scenes) do
-            local out_path = CutterService.derive_output_path(video_path, sc)
+            local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
             table.insert(lines, string.format('echo "Cutting Scene %d: %s..."', sc.id, sc.title))
             table.insert(lines, CutterService.build_cut_command(video_path, sc, out_path, false, "ffmpeg"))
             table.insert(lines, "")
@@ -377,7 +402,7 @@ function CutterService.generate_script(video_path, scenes, is_win)
 end
 
 --- Export batch script to disk
-function CutterService.export_script(video_path, scenes, is_win)
+function CutterService.export_script(video_path, scenes, is_win, work_dir)
     if not video_path or video_path == "" then
         return false, "Video path is required to export cut script"
     end
@@ -386,8 +411,22 @@ function CutterService.export_script(video_path, scenes, is_win)
     end
 
     local ext = Platform.script_ext(is_win)
-    local script_path = video_path:gsub("%.[^%.\\/]+$", "") .. "_cut_scenes" .. ext
-    local script_content = CutterService.generate_script(video_path, scenes, is_win)
+    local dir, filename = video_path:match("^(.-)([^\\/]+)$")
+    if not dir then dir = ""; filename = video_path end
+    local stem = filename:match("^(.*)%.[^%.\\/]+$") or filename
+
+    local script_dir = dir
+    if work_dir and work_dir:match("%S") then
+        work_dir = work_dir:match("^%s*(.-)%s*$")
+        local sep = (work_dir:find("\\") or Platform.is_windows) and "\\" or "/"
+        if not work_dir:match("[\\/]$") then
+            work_dir = work_dir .. sep
+        end
+        script_dir = work_dir
+    end
+
+    local script_path = script_dir .. stem .. "_cut_scenes" .. ext
+    local script_content = CutterService.generate_script(video_path, scenes, is_win, work_dir)
 
     local f, err = io.open(script_path, "w")
     if not f then
@@ -405,8 +444,14 @@ function CutterService.export_script(video_path, scenes, is_win)
     return true, script_path
 end
 
---- Execute async cut for single scene without locking VLC UI
-function CutterService.cut_scene_async(video_path, scene, is_win)
+--- Execute synchronous FFmpeg cut for single scene with exit code inspection & error logging
+-- Lossless stream copy (-c copy) finishes in 50-200ms without noticeable UI pause
+-- @param video_path string Path to media file
+-- @param scene Scene Target scene entity
+-- @param is_win boolean Optional override for testing
+-- @param work_dir string Optional custom working directory
+-- @return boolean, string ok, out_path_or_error_detail
+function CutterService.cut_scene(video_path, scene, is_win, work_dir)
     if not video_path or video_path == "" then
         return false, "Video path is required for cutting"
     end
@@ -420,17 +465,54 @@ function CutterService.cut_scene_async(video_path, scene, is_win)
         return false, bin_or_err
     end
 
-    local out_path = CutterService.derive_output_path(video_path, scene)
-    local raw_cmd = CutterService.build_cut_command(video_path, scene, out_path, is_win, bin_or_err)
-    local bg_cmd = Platform.bg_command(raw_cmd, nil, is_win)
+    local out_path = CutterService.derive_output_path(video_path, scene, work_dir)
+    local log_file = Platform.temp_log_path(string.format("vlc_cut_scene_%d.log", scene.id), is_win)
+    local q_log = Platform.quote(log_file, is_win)
 
-    if os and os.execute then
-        local code = os.execute(bg_cmd)
-        return true, out_path
-    else
+    local raw_cmd = CutterService.build_cut_command(video_path, scene, out_path, is_win, bin_or_err)
+    local full_cmd = raw_cmd .. " > " .. q_log .. " 2>&1"
+
+    if not (os and os.execute) then
         return false, "os.execute is unavailable in this Lua environment"
     end
+
+    local code = os.execute(full_cmd)
+    local success = (code == 0 or code == true)
+
+    if success then
+        local f = io.open(out_path, "r")
+        if f then
+            f:close()
+            return true, out_path
+        else
+            return false, "FFmpeg exited successfully, but output file was not created: " .. out_path
+        end
+    else
+        -- Extract error from FFmpeg log file
+        local err_detail = "Exit code " .. tostring(code)
+        local f_log = io.open(log_file, "r")
+        if f_log then
+            local last_lines = {}
+            for line in f_log:lines() do
+                line = line:match("^%s*(.-)%s*$")
+                if line ~= "" then
+                    table.insert(last_lines, line)
+                    if #last_lines > 4 then
+                        table.remove(last_lines, 1)
+                    end
+                end
+            end
+            f_log:close()
+            if #last_lines > 0 then
+                err_detail = table.concat(last_lines, " | ")
+            end
+        end
+        return false, string.format("FFmpeg failed (%s). Log: %s", err_detail, log_file)
+    end
 end
+
+-- Backward compatibility alias
+CutterService.cut_scene_async = CutterService.cut_scene
 
 --------------------------------------------------
 -- 6. Repository: SceneRepository
@@ -556,6 +638,27 @@ function SceneRepository:get_by_id(id)
     return nil
 end
 
+--- Delete scene by ID and reindex remaining scenes
+-- @param id number Scene ID to delete
+-- @return boolean, Scene|string ok, deleted_scene_or_error
+function SceneRepository:delete(id)
+    local found_idx = nil
+    for i, sc in ipairs(self.scenes) do
+        if sc.id == id then
+            found_idx = i
+            break
+        end
+    end
+
+    if not found_idx then
+        return false, "Scene not found for ID: " .. tostring(id)
+    end
+
+    local deleted = table.remove(self.scenes, found_idx)
+    self:sort_and_reindex()
+    return true, deleted
+end
+
 function SceneRepository:count()
     return #self.scenes
 end
@@ -624,6 +727,16 @@ function VlcPlayerAdapter.get_video_path()
     return path
 end
 
+--- Guess work directory from playing item
+function VlcPlayerAdapter.guess_work_dir()
+    local path = VlcPlayerAdapter.get_video_path()
+    if path ~= "" then
+        local dir = path:match("^(.*[\\/])")
+        return dir or ""
+    end
+    return ""
+end
+
 --- Guess .scn file path from playing item
 function VlcPlayerAdapter.guess_scn_path()
     local path = VlcPlayerAdapter.get_video_path()
@@ -636,24 +749,136 @@ end
 --------------------------------------------------
 -- 8. Application Controller & UI View
 --------------------------------------------------
+--- Wrap status text with <br> breaks, breaking at whitespace and directory slashes
+local function wrap_status_text(text, max_len, max_lines)
+    max_len = max_len or 55
+    local out_lines = {}
+    local normalized = tostring(text):gsub("<br%s*/?>", "\n")
+    for raw_line in (normalized .. "\n"):gmatch("(.-)\r?\n") do
+        if #raw_line <= max_len then
+            table.insert(out_lines, raw_line)
+        else
+            local cur = ""
+            for token in raw_line:gmatch("%S+") do
+                local pieces = {}
+                if #token > max_len then
+                    local p_cur = ""
+                    for seg in token:gmatch("[\\/]?[^\\/]+") do
+                        if #p_cur + #seg > max_len and #p_cur > 0 then
+                            table.insert(pieces, p_cur)
+                            p_cur = seg
+                        else
+                            p_cur = p_cur .. seg
+                        end
+                        while #p_cur > max_len do
+                            table.insert(pieces, p_cur:sub(1, max_len))
+                            p_cur = p_cur:sub(max_len + 1)
+                        end
+                    end
+                    if token:match("[\\/]$") and #p_cur > 0 and not p_cur:match("[\\/]$") then
+                        p_cur = p_cur .. token:match("[\\/]$")
+                    end
+                    if #p_cur > 0 then
+                        table.insert(pieces, p_cur)
+                    end
+                else
+                    table.insert(pieces, token)
+                end
+
+                for _, piece in ipairs(pieces) do
+                    if #cur == 0 then
+                        cur = piece
+                    elseif #cur + 1 + #piece <= max_len then
+                        cur = cur .. " " .. piece
+                    else
+                        table.insert(out_lines, cur)
+                        cur = piece
+                    end
+                end
+            end
+            if #cur > 0 then
+                table.insert(out_lines, cur)
+            end
+        end
+    end
+
+    if max_lines and #out_lines > max_lines then
+        local trimmed = {}
+        for i = 1, max_lines - 1 do
+            table.insert(trimmed, out_lines[i])
+        end
+        local last_line = out_lines[max_lines]
+        if #last_line > max_len - 3 then
+            last_line = last_line:sub(1, max_len - 3)
+        end
+        table.insert(trimmed, last_line .. "...")
+        out_lines = trimmed
+    end
+
+    return table.concat(out_lines, "<br>")
+end
+
 local app = {
-    repo         = nil,
-    dlg          = nil,
-    path_input   = nil,
-    list         = nil,
-    start_input  = nil,
-    end_input    = nil,
-    title_input  = nil,
-    status_label = nil
+    repo          = nil,
+    dlg           = nil,
+    workdir_input = nil,
+    path_input    = nil,
+    list          = nil,
+    start_input   = nil,
+    end_input     = nil,
+    title_input   = nil,
+    status_box    = nil,
+    status_label  = nil -- retained for backward-compatibility in test mocks
 }
 
-function app:set_status(msg)
+function app:set_status(msg, level)
+    local color = "#333333"
+    if level == "error" or msg:find("❌") then
+        color = "#c62828"
+    elseif level == "success" or msg:find("✅") then
+        color = "#2e7d32"
+    elseif level == "warn" or msg:find("⚠️") then
+        color = "#e65100"
+    end
+
+    local wrapped = wrap_status_text(msg, 55)
+    local html = string.format("<div style='font-family:sans-serif; font-size:11px; margin:0; padding:0; line-height:1.3; color:%s;'>%s</div>", color, wrapped)
+
+    if self.status_box then
+        self.status_box:set_text(html)
+    end
     if self.status_label then
-        self.status_label:set_text(msg)
+        self.status_label:set_text(html)
     end
     if vlc and vlc.msg then
-        vlc.msg.dbg("[SceneMarker] " .. msg)
+        vlc.msg.dbg("[SceneMarker] " .. msg:gsub("<[^>]+>", ""))
     end
+end
+
+function app:get_work_dir()
+    if self.workdir_input then
+        local wd = self.workdir_input:get_text()
+        if wd and wd:match("%S") then
+            return wd:match("^%s*(.-)%s*$")
+        end
+    end
+    return nil
+end
+
+function app:get_scn_path()
+    if not self.path_input then return "" end
+    local p = self.path_input:get_text()
+    if not p or p:match("^%s*$") then return "" end
+    p = p:match("^%s*(.-)%s*$")
+    if not p:find("[\\/]") then
+        local wd = self:get_work_dir()
+        if wd then
+            local sep = (wd:find("\\") or Platform.is_windows) and "\\" or "/"
+            if not wd:match("[\\/]$") then wd = wd .. sep end
+            return wd .. p
+        end
+    end
+    return p
 end
 
 function app:refresh_list()
@@ -667,9 +892,8 @@ function app:refresh_list()
 end
 
 function app:on_load_file()
-    if not self.path_input then return end
-    local path = self.path_input:get_text()
-    if not path or path:match("^%s*$") then
+    local path = self:get_scn_path()
+    if not path or path == "" then
         self:set_status("⚠️ Please enter a valid .scn file path.")
         return
     end
@@ -684,7 +908,8 @@ function app:on_load_file()
     end
 
     self:refresh_list()
-    self:set_status(string.format("✅ Loaded %d scene(s) from .scn file.", res))
+    local basename = path:match("([^\\/]+)$") or path
+    self:set_status(string.format("✅ Loaded %d scene(s) from %s", res, basename))
 end
 
 function app:on_mark_start()
@@ -714,17 +939,15 @@ function app:on_mark_end()
 end
 
 function app:on_add_scene()
-    if not (self.start_input and self.end_input and self.path_input) then return end
-
-    local s_text = self.start_input:get_text()
-    local e_text = self.end_input:get_text()
-    local title  = self.title_input and self.title_input:get_text() or ""
-    local path   = self.path_input:get_text()
-
-    if not path or path:match("^%s*$") then
+    local path = self:get_scn_path()
+    if not path or path == "" then
         self:set_status("⚠️ Target .scn file path is required to save scene.")
         return
     end
+
+    local s_text = self.start_input and self.start_input:get_text() or ""
+    local e_text = self.end_input and self.end_input:get_text() or ""
+    local title  = self.title_input and self.title_input:get_text() or ""
 
     local start_tc, s_err = TimeCode.from_string(s_text)
     if not start_tc then
@@ -758,8 +981,8 @@ function app:on_add_scene()
     self:refresh_list()
 
     -- Reset fragment inputs for next capture
-    self.start_input:set_text("")
-    self.end_input:set_text("")
+    if self.start_input then self.start_input:set_text("") end
+    if self.end_input then self.end_input:set_text("") end
     if self.title_input then self.title_input:set_text("") end
 end
 
@@ -793,7 +1016,7 @@ function app:on_jump_to_start()
     if not ok then
         self:set_status("❌ " .. seek_err)
     else
-        self:set_status(string.format("▶ Jumped to Scene %d Start: %s", sc.id, sc.start_tc:to_string(true, ",")))
+        self:set_status(string.format("▶ Jumped Scene %d Start: %s", sc.id, sc.start_tc:to_string(true, ",")))
     end
 end
 
@@ -808,29 +1031,62 @@ function app:on_jump_to_end()
     if not ok then
         self:set_status("❌ " .. seek_err)
     else
-        self:set_status(string.format("⏹ Jumped to Scene %d End: %s", sc.id, sc.end_tc:to_string(true, ",")))
+        self:set_status(string.format("⏹ Jumped Scene %d End: %s", sc.id, sc.end_tc:to_string(true, ",")))
     end
 end
 
 function app:on_cut_selected()
     local sc, err = self:get_selected_scene()
     if not sc then
-        self:set_status("⚠️ " .. err)
+        self:set_status("⚠️ " .. err, "warn")
         return
     end
 
     local video_path = VlcPlayerAdapter.get_video_path()
     if not video_path or video_path == "" then
-        self:set_status("⚠️ Cannot determine playing video file path")
+        self:set_status("⚠️ Cannot determine playing video file path", "warn")
         return
     end
 
-    local ok, res = CutterService.cut_scene_async(video_path, sc)
+    local work_dir = self:get_work_dir()
+    local ok, res = CutterService.cut_scene(video_path, sc, nil, work_dir)
     if not ok then
-        self:set_status("❌ Cut failed: " .. tostring(res))
+        self:set_status("❌ Cut failed: " .. tostring(res), "error")
     else
-        self:set_status(string.format("✂️ Cutting Scene %d in background: %s", sc.id, res))
+        local basename = res:match("([^\\/]+)$") or res
+        self:set_status(string.format("✅ Scene %d cut complete: %s\nSaved to: %s", sc.id, basename, res), "success")
     end
+end
+
+function app:on_delete_selected()
+    local sc, err = self:get_selected_scene()
+    if not sc then
+        self:set_status("⚠️ " .. err)
+        return
+    end
+
+    local del_id = sc.id
+    local del_title = sc.title
+
+    local ok, res = self.repo:delete(del_id)
+    if not ok then
+        self:set_status("❌ " .. tostring(res))
+        return
+    end
+
+    local path = self:get_scn_path()
+    if path and path ~= "" then
+        local save_ok, save_err = self.repo:save(path)
+        if not save_ok then
+            self:set_status("⚠️ Deleted in memory, but failed to save file: " .. tostring(save_err))
+        else
+            self:set_status(string.format("🗑️ Deleted Scene %d: '%s'", del_id, del_title))
+        end
+    else
+        self:set_status(string.format("🗑️ Deleted Scene %d: '%s'.", del_id, del_title))
+    end
+
+    self:refresh_list()
 end
 
 function app:on_export_script()
@@ -845,61 +1101,69 @@ function app:on_export_script()
         return
     end
 
-    local ok, res = CutterService.export_script(video_path, self.repo.scenes)
+    local work_dir = self:get_work_dir()
+    local ok, res = CutterService.export_script(video_path, self.repo.scenes, nil, work_dir)
     if not ok then
         self:set_status("❌ Export script failed: " .. tostring(res))
     else
-        self:set_status("📄 Batch cut script exported: " .. res)
+        local basename = res:match("([^\\/]+)$") or res
+        self:set_status("📄 Cut script exported: " .. basename)
     end
 end
 
 --------------------------------------------------
--- 9. VLC Extension Lifecycle Hooks
+-- 9. VLC Extension Lifecycle Hooks & Menu
 --------------------------------------------------
 function activate()
     if app.dlg then return end
 
-    app.repo = SceneRepository.new()
+    if not app.repo then
+        app.repo = SceneRepository.new()
+    end
     app.dlg = vlc.dialog("Scene Marker")
 
-    -- Row 1: Actions & Navigation
-    app.dlg:add_button("Load .scn File",   function() app:on_load_file() end,      1, 1, 2, 1)
-    app.dlg:add_button("▶ Jump to Start",  function() app:on_jump_to_start() end,  3, 1, 1, 1)
-    app.dlg:add_button("⏹ Jump to End",    function() app:on_jump_to_end() end,    4, 1, 1, 1)
-    app.dlg:add_button("Close",            close,                                 5, 1, 1, 1)
+    -- Row 1: File Actions & Window Controls (Close button removed)
+    app.dlg:add_button("Load .scn File",       function() app:on_load_file() end,      1, 1, 2, 1)
+    app.dlg:add_button("📄 Export Cut Script", function() app:on_export_script() end, 3, 1, 3, 1)
 
-    -- Row 2: File path label
-    app.dlg:add_label("<i>Type or paste the path to your .scn file below:</i>", 1, 2, 5, 1)
+    -- Row 2: Working Directory input (defaults to playing video directory)
+    app.dlg:add_label("<b>Work Dir:</b>", 1, 2, 1, 1)
+    local initial_work_dir = VlcPlayerAdapter.guess_work_dir()
+    app.workdir_input = app.dlg:add_text_input(initial_work_dir, 2, 2, 4, 1)
 
-    -- Row 3: File path input
+    -- Row 3: .scn file input
+    app.dlg:add_label("<b>.scn File:</b>", 1, 3, 1, 1)
     local initial_path = VlcPlayerAdapter.guess_scn_path()
-    app.path_input = app.dlg:add_text_input(initial_path, 1, 3, 5, 1)
+    app.path_input = app.dlg:add_text_input(initial_path, 2, 3, 4, 1)
 
     -- Rows 4-11: Scenes list view (height 8)
     app.list = app.dlg:add_list(1, 4, 5, 8)
     app.list:add_value(string.format("%-4s %-12s %-12s %-30s", "ID", "Start", "End", "Title"), 0)
 
-    -- Row 12: Fragment Start input & Mark Start button
-    app.dlg:add_label("<b>Start:</b>", 1, 12, 1, 1)
-    app.start_input = app.dlg:add_text_input("", 2, 12, 2, 1)
-    app.dlg:add_button("⏱️ Mark Start (In)", function() app:on_mark_start() end, 4, 12, 2, 1)
+    -- Row 12: Selected Scene Action Toolbar (directly under the list!)
+    app.dlg:add_label("<b>Selected:</b>", 1, 12, 1, 1)
+    app.dlg:add_button("▶ Jump Start", function() app:on_jump_to_start() end,   2, 12, 1, 1)
+    app.dlg:add_button("⏹ Jump End",   function() app:on_jump_to_end() end,     3, 12, 1, 1)
+    app.dlg:add_button("✂️ Cut",        function() app:on_cut_selected() end,    4, 12, 1, 1)
+    app.dlg:add_button("🗑️ Delete",     function() app:on_delete_selected() end, 5, 12, 1, 1)
 
-    -- Row 13: Fragment End input & Mark End button
-    app.dlg:add_label("<b>End:</b>", 1, 13, 1, 1)
-    app.end_input = app.dlg:add_text_input("", 2, 13, 2, 1)
-    app.dlg:add_button("⏱️ Mark End (Out)", function() app:on_mark_end() end, 4, 13, 2, 1)
+    -- Row 13: Fragment Start input & Mark Start button
+    app.dlg:add_label("<b>Start:</b>", 1, 13, 1, 1)
+    app.start_input = app.dlg:add_text_input("", 2, 13, 2, 1)
+    app.dlg:add_button("⏱️ Mark Start (In)", function() app:on_mark_start() end, 4, 13, 2, 1)
 
-    -- Row 14: Scene Title input & Add Scene button
-    app.dlg:add_label("<b>Title:</b>", 1, 14, 1, 1)
-    app.title_input = app.dlg:add_text_input("", 2, 14, 2, 1)
-    app.dlg:add_button("➕ Add & Save Scene", function() app:on_add_scene() end, 4, 14, 2, 1)
+    -- Row 14: Fragment End input & Mark End button
+    app.dlg:add_label("<b>End:</b>", 1, 14, 1, 1)
+    app.end_input = app.dlg:add_text_input("", 2, 14, 2, 1)
+    app.dlg:add_button("⏱️ Mark End (Out)", function() app:on_mark_end() end, 4, 14, 2, 1)
 
-    -- Row 15: FFmpeg Cutting Actions
-    app.dlg:add_button("✂️ Cut Selected Scene", function() app:on_cut_selected() end, 1, 15, 2, 1)
-    app.dlg:add_button("📄 Export Cut Script",   function() app:on_export_script() end, 3, 15, 3, 1)
+    -- Row 15: Scene Title input & Add Scene button
+    app.dlg:add_label("<b>Title:</b>", 1, 15, 1, 1)
+    app.title_input = app.dlg:add_text_input("", 2, 15, 2, 1)
+    app.dlg:add_button("➕ Add & Save Scene", function() app:on_add_scene() end, 4, 15, 2, 1)
 
-    -- Row 16: Status label
-    app.status_label = app.dlg:add_label("Ready. Load an .scn file or mark fragment timestamps.", 1, 16, 5, 1)
+    -- Row 16: Fixed-height Scrollable & Copyable Status Area (QTextBrowser, height ~75-80px / ~4 lines, scrollbar as needed)
+    app.status_box = app.dlg:add_html("<div style='font-family:sans-serif; font-size:11px; margin:0; padding:0; color:#666;'>Ready. Load an .scn file or mark fragment timestamps.</div>", 1, 16, 5, 1)
 
     -- Auto-load if .scn file exists at guessed path
     if initial_path ~= "" then
@@ -911,16 +1175,63 @@ function activate()
     end
 end
 
+function menu()
+    return {
+        "⏱️ Mark Start (In)",
+        "⏱️ Mark End (Out)",
+        "➕ Add & Save Scene",
+        "▶ Jump to Selected Start",
+        "⏹ Jump to Selected End",
+        "✂️ Cut Selected Scene",
+        "🗑️ Delete Selected Scene",
+        "📄 Export Cut Script"
+    }
+end
+
+function trigger_menu(id)
+    if not app.repo then
+        app.repo = SceneRepository.new()
+        local initial_path = VlcPlayerAdapter.guess_scn_path()
+        if initial_path ~= "" then
+            local f = io.open(initial_path, "r")
+            if f then
+                f:close()
+                app.repo:load(initial_path)
+            end
+        end
+    end
+
+    if id == 1 then
+        app:on_mark_start()
+    elseif id == 2 then
+        app:on_mark_end()
+    elseif id == 3 then
+        app:on_add_scene()
+    elseif id == 4 then
+        app:on_jump_to_start()
+    elseif id == 5 then
+        app:on_jump_to_end()
+    elseif id == 6 then
+        app:on_cut_selected()
+    elseif id == 7 then
+        app:on_delete_selected()
+    elseif id == 8 then
+        app:on_export_script()
+    end
+end
+
 function deactivate()
     if app.dlg then
         app.dlg:delete()
     end
     app.dlg = nil
     app.list = nil
+    app.workdir_input = nil
     app.path_input = nil
     app.start_input = nil
     app.end_input = nil
     app.title_input = nil
+    app.status_box = nil
     app.status_label = nil
     app.repo = nil
 end
@@ -940,6 +1251,7 @@ if _G and _G.__TEST__ then
         Platform         = Platform,
         CutterService    = CutterService,
         VlcPlayerAdapter = VlcPlayerAdapter,
-        app              = app
+        app              = app,
+        wrap_status_text = wrap_status_text
     }
 end

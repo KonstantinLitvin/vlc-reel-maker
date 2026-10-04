@@ -37,6 +37,13 @@ _G.vlc = {
         return {
             add_button = function() return {} end,
             add_label  = function() return { set_text = function() end } end,
+            add_html   = function(text)
+                local val = text or ""
+                return {
+                    get_text = function() return val end,
+                    set_text = function(self, t) val = t end
+                }
+            end,
             add_text_input = function(text)
                 local val = text or ""
                 return {
@@ -205,10 +212,32 @@ test("SceneRepository: load, sort out-of-order, reindex, save", function()
 
     local repo2 = SceneRepository.new()
     repo2:load(tmp_path)
-    assert_eq(repo2:count(), 3, "Re-read count matches 3")
-    assert_eq(repo2:get_by_id(2).title, "Middle Scene", "Re-read ID lookup matches")
+    -- Delete middle scene and verify reindex
+    local del_ok, del_sc = repo2:delete(2)
+    assert_true(del_ok, "Delete should succeed")
+    assert_eq(del_sc.title, "Middle Scene", "Deleted correct scene")
+    assert_eq(repo2:count(), 2, "Remaining count is 2")
+    assert_eq(repo2.scenes[1].id, 1, "First scene ID is 1")
+    assert_eq(repo2.scenes[2].id, 2, "Last scene re-indexed to 2")
+    assert_eq(repo2.scenes[2].title, "Later Scene", "Last scene is Later Scene")
 
     os.remove(tmp_path)
+end)
+
+test("Extension descriptor and menu() hooks", function()
+    local desc = descriptor()
+    assert_eq(desc.title, "Scene Marker", "Descriptor title matches")
+    assert_eq(desc.capabilities[1], "menu", "Menu capability declared")
+
+    local m = menu()
+    assert_true(type(m) == "table", "Menu returns table")
+    assert_eq(#m, 8, "Menu has exactly 8 clean functional actions")
+    assert_true(m[1]:find("Mark Start", 1, true) ~= nil, "First menu item is Mark Start")
+
+    for i, item in ipairs(m) do
+        assert_true(item ~= "---", string.format("Menu item %d should not be a separator", i))
+        assert_true(item:find("Show / Open", 1, true) == nil, string.format("Menu item %d should not be redundant window opener", i))
+    end
 end)
 
 -- 4. Platform abstraction tests
@@ -294,13 +323,117 @@ test("CutterService.find_ffmpeg and check_ffmpeg discovery", function()
 end)
 
 -- 6. VlcPlayerAdapter tests
-test("VlcPlayerAdapter: get_current_time and guess_scn_path", function()
+test("VlcPlayerAdapter: get_current_time, guess_scn_path, and guess_work_dir", function()
     local tc, err = VlcPlayerAdapter.get_current_time()
     assert_true(tc ~= nil, "Current time returned: " .. tostring(err))
     assert_eq(tc:to_string(true, ","), "00:01:15,450", "Microseconds accurately converted")
 
     local scn_path = VlcPlayerAdapter.guess_scn_path()
     assert_eq(scn_path, "/home/user/Videos/sample_movie.scn", "Guessed .scn path correctly")
+
+    local work_dir = VlcPlayerAdapter.guess_work_dir()
+    assert_eq(work_dir, "/home/user/Videos/", "Guessed work directory correctly")
+end)
+
+-- 7. Work Dir & UI Truncation tests
+test("CutterService.derive_output_path with custom work_dir", function()
+    local sc = Scene.new(1, TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Opening")
+    -- Without custom work_dir (inherits video dir)
+    local def_path = CutterService.derive_output_path("/media/films/movie.mp4", sc)
+    assert_eq(def_path, "/media/films/movie_scene_01_Opening.mp4", "Default uses video directory")
+
+    -- With custom work_dir with trailing slash
+    local custom_path1 = CutterService.derive_output_path("/media/films/movie.mp4", sc, "/cuts/scenes/")
+    assert_eq(custom_path1, "/cuts/scenes/movie_scene_01_Opening.mp4", "Custom work_dir with trailing slash")
+
+    -- With custom work_dir without trailing slash
+    local custom_path2 = CutterService.derive_output_path("/media/films/movie.mp4", sc, "/cuts/scenes")
+    assert_eq(custom_path2, "/cuts/scenes/movie_scene_01_Opening.mp4", "Custom work_dir appended with separator")
+end)
+
+test("wrap_status_text path-aware line wrapping and optional line cap", function()
+    local wrap = T.wrap_status_text
+    assert_eq(wrap(""), "", "Empty string returns empty")
+    assert_eq(wrap("Ready."), "Ready.", "Short text remains untouched")
+
+    -- Long path wrapped at directory separator
+    local long_path = "/home/konstantin/Documents/PythonProjects/scene-maker/very/long/nested/path/to/movie.scn"
+    local wrapped = wrap(long_path, 40)
+    assert_true(wrapped:find("<br>") ~= nil, "Path wrapped with <br>")
+    for line in wrapped:gmatch("[^<]+") do
+        local clean = line:gsub("^br>", "")
+        assert_true(#clean <= 45, "Wrapped segment within length limit: " .. clean)
+    end
+
+    -- By default (no max_lines), all lines are preserved for scrolling
+    local six_lines = "1\n2\n3\n4\n5\n6"
+    local full_wrapped = wrap(six_lines, 55)
+    local full_count = 1
+    for _ in full_wrapped:gmatch("<br>") do full_count = full_count + 1 end
+    assert_eq(full_count, 6, "All lines preserved for scrollable view")
+
+    -- When max_lines is explicitly passed, text is clamped with ellipsis
+    local capped = wrap(six_lines, 55, 4)
+    local capped_count = 1
+    for _ in capped:gmatch("<br>") do capped_count = capped_count + 1 end
+    assert_eq(capped_count, 4, "Clamped to 4 lines when max_lines=4")
+    assert_true(capped:find("...", 1, true) ~= nil, "Includes ellipsis when clamped")
+end)
+
+test("app:set_status scrollable & copyable status_box rich HTML formatting", function()
+    local app = T.app
+    local last_box_text = nil
+    app.status_box = {
+        set_text = function(self, text)
+            last_box_text = text
+        end
+    }
+
+    -- Long error message with full path is preserved with wrapping without truncation
+    local long_err = "❌ Failed to save file: /home/konstantin/Documents/PythonProjects/scene-maker/very/long/nested/path/to/movie.scn (Permission denied)"
+    app:set_status(long_err, "error")
+    assert_true(last_box_text:find("Permission denied", 1, true) ~= nil, "Full error details preserved")
+    assert_true(last_box_text:find("color:#c62828", 1, true) ~= nil, "Error rendered with red color style")
+    assert_true(last_box_text:find("<br>", 1, true) ~= nil, "Long path wrapped with <br>")
+
+    -- Multi-line error preserves all lines for vertical scrollbar
+    local multi_err = "❌ FFmpeg cut error:\nLine 2 details\nLine 3 details\nLine 4 details\nLine 5 overflow\nLine 6 overflow"
+    app:set_status(multi_err, "error")
+    local count = 1
+    for _ in last_box_text:gmatch("<br>") do count = count + 1 end
+    assert_eq(count, 6, "All 6 lines preserved for scrollable QTextBrowser")
+
+    -- Success message formatting
+    local succ_msg = "✅ Cut complete: movie_scene_01.mp4"
+    app:set_status(succ_msg, "success")
+    assert_true(last_box_text:find("movie_scene_01.mp4", 1, true) ~= nil, "Success text preserved")
+    assert_true(last_box_text:find("color:#2e7d32", 1, true) ~= nil, "Success rendered with green color style")
+end)
+
+test("CutterService.cut_scene synchronous execution and error log capture", function()
+    local sc = Scene.new(1, TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Test")
+    -- When video file does not exist, FFmpeg fails and returns error with log details
+    local ok, res = CutterService.cut_scene("/tmp/non_existent_input_12345.mp4", sc, false)
+    assert_true(not ok, "Cut fails gracefully when input does not exist")
+    assert_true(res:find("FFmpeg failed", 1, true) ~= nil, "Error message reports failure")
+    assert_true(res:find("Log:", 1, true) ~= nil, "Log file location is reported")
+end)
+
+test("app:get_scn_path resolves relative filenames with work_dir", function()
+    local app = T.app
+    app.workdir_input = {
+        get_text = function() return "/workspace/output" end
+    }
+    app.path_input = {
+        get_text = function() return "film_notes.scn" end
+    }
+
+    local resolved = app:get_scn_path()
+    assert_eq(resolved, "/workspace/output/film_notes.scn", "Relative filename combined with work_dir")
+
+    -- Absolute path should remain untouched
+    app.path_input.get_text = function() return "/custom/abs/path.scn" end
+    assert_eq(app:get_scn_path(), "/custom/abs/path.scn", "Absolute path unchanged")
 end)
 
 print("--------------------------------------------------")

@@ -11,7 +11,7 @@ A modern, VLC media player extension written in Lua for video fragment capture, 
 - **🔄 Auto-Sorting & Reindexing**: Newly captured scenes are sorted chronologically and assigned sequential IDs (1..N).
 - **▶ Non-Blocking Navigation**: Jump to scene Start or End timestamps instantly without VLC interface thread locks.
 - **✂️ FFmpeg Video Cutting**:
-  - **Cut Selected Scene**: Executes an asynchronous, lossless stream copy (`-c copy`) in the background.
+  - **Cut Selected Scene**: Executes an ultra-fast, lossless stream copy (`-c copy`) with verified exit status, output file validation, and error log diagnostics.
   - **Export Cut Script**: Generates a self-contained batch script (`.sh` for Linux or `.bat` for Windows) next to your video for one-click processing.
 - **🌐 Cross-Platform Compatibility**: Full support for Linux (POSIX shell, Snap confinement) and Windows (`cmd.exe` batch files, `start /B` background tasks).
 
@@ -99,18 +99,23 @@ or place `ffmpeg.exe` into `%APPDATA%\vlc\bin\`.
 ## Usage
 
 1. Open VLC Media Player and start playing a video.
-2. In the menu bar, open: **View** -> **Scene Marker**.
-3. The `.scn` file path is auto-detected. If an `.scn` file already exists, it is loaded automatically.
+2. In the menu bar, open: **View** -> **Scene Marker** (or right-click the video canvas and choose **Scene Marker** actions from the menu).
+3. **Working Directory & File Path**:
+   - **Work Dir**: Auto-detected from playing video directory. Specify a custom folder to save cut clips and exported scripts elsewhere.
+   - **.scn File**: Auto-detected `.scn` path. If an `.scn` file already exists, it is loaded automatically.
 4. **Marking a Fragment**:
    - Click `[ ⏱️ Mark Start (In) ]` at the fragment start.
    - Click `[ ⏱️ Mark End (Out) ]` at the fragment end.
    - Enter a title (or leave blank for auto-generated `Scene N`).
    - Click `[ ➕ Add & Save Scene ]`.
-5. **Navigating**:
-   - Select a row in the list and click `[ ▶ Jump to Start ]` or `[ ⏹ Jump to End ]`.
-6. **Cutting Video**:
-   - Click `[ ✂️ Cut Selected Scene ]` to cut the selected fragment in the background.
-   - Click `[ 📄 Export Cut Script ]` to create a `movie_cut_scenes.sh` (or `.bat`) batch script right next to your video.
+5. **Managing Selected Scenes**:
+   - Select any scene row in the list to enable the toolbar:
+     - `[ ▶ Jump Start ]`: Seeks playback to the scene start.
+     - `[ ⏹ Jump End ]`: Seeks playback to the scene end.
+     - `[ ✂️ Cut ]`: Cuts the selected fragment in the background using FFmpeg into your working directory.
+     - `[ 🗑️ Delete ]`: Removes the scene, reindexes remaining scenes sequentially, and updates the `.scn` file.
+6. **Batch Export**:
+   - Click `[ 📄 Export Cut Script ]` to create a `movie_cut_scenes.sh` (or `.bat`) batch script inside your working directory.
 
 ---
 
