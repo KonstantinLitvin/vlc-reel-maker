@@ -1,5 +1,5 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 
 REM Windows FFmpeg installer / setup for VLC Scene Marker
 REM Checks for existing ffmpeg, attempts winget install, or downloads to %APPDATA%\vlc\bin
@@ -8,13 +8,15 @@ echo ==================================================
 echo Checking FFmpeg for VLC Scene Marker (Windows)
 echo ==================================================
 
+REM Check if ffmpeg is in PATH
 where ffmpeg.exe >nul 2>&1
-if %ERRORLEVEL% equ 0 (
+if not errorlevel 1 (
     echo [OK] FFmpeg is already installed and available in PATH:
     where ffmpeg.exe
     goto :done
 )
 
+REM Check dedicated VLC tools directory
 if exist "%APPDATA%\vlc\bin\ffmpeg.exe" (
     echo [OK] FFmpeg found in dedicated directory: %APPDATA%\vlc\bin\ffmpeg.exe
     goto :done
@@ -22,17 +24,21 @@ if exist "%APPDATA%\vlc\bin\ffmpeg.exe" (
 
 echo FFmpeg is not found in PATH or %APPDATA%\vlc\bin\.
 echo.
-echo Option 1: Attempting installation via winget...
-where winget.exe >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    winget install Gyan.FFmpeg --accept-package-agreements --accept-source-agreements
-    if %ERRORLEVEL% equ 0 (
-        echo [OK] Successfully installed FFmpeg via winget!
-        echo Please restart VLC to pick up the updated PATH.
-        goto :done
-    )
-)
 
+REM Option 1: Try winget
+where winget.exe >nul 2>&1
+if errorlevel 1 goto :try_download
+
+echo Option 1: Attempting installation via winget...
+winget install Gyan.FFmpeg --accept-package-agreements --accept-source-agreements
+if not errorlevel 1 (
+    echo [OK] Successfully installed FFmpeg via winget.
+    echo Please restart VLC to pick up the updated PATH.
+    goto :done
+)
+echo Winget installation failed. Falling back to standalone download...
+
+:try_download
 echo.
 echo Option 2: Downloading standalone FFmpeg to %APPDATA%\vlc\bin\...
 set "TARGET_DIR=%APPDATA%\vlc\bin"
@@ -50,7 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Write-Host '[OK] Installed ffmpeg.exe to $env:APPDATA\vlc\bin\ffmpeg.exe'"
 
 if exist "%APPDATA%\vlc\bin\ffmpeg.exe" (
-    echo [OK] FFmpeg setup succeeded!
+    echo [OK] FFmpeg setup succeeded.
 ) else (
     echo [WARNING] Automatic download failed. You can manually download ffmpeg from:
     echo https://ffmpeg.org/download.html and add it to your PATH.
@@ -61,3 +67,4 @@ echo ==================================================
 echo Setup complete. Restart VLC and open View -> Scene Marker.
 echo ==================================================
 pause
+endlocal
