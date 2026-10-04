@@ -661,6 +661,39 @@ function SceneRepository:delete(id)
     return true, deleted
 end
 
+--- Delete multiple scenes by IDs and reindex remaining scenes
+-- @param ids table Array of scene IDs to delete
+-- @return boolean, number|string ok, deleted_count_or_error
+function SceneRepository:delete_many(ids)
+    if not ids or #ids == 0 then
+        return false, "No scene IDs provided to delete"
+    end
+
+    local id_set = {}
+    for _, id in ipairs(ids) do
+        local n = tonumber(id)
+        if n then id_set[n] = true end
+    end
+
+    local kept = {}
+    local deleted_count = 0
+    for _, sc in ipairs(self.scenes) do
+        if id_set[sc.id] then
+            deleted_count = deleted_count + 1
+        else
+            table.insert(kept, sc)
+        end
+    end
+
+    if deleted_count == 0 then
+        return false, "No matching scenes found to delete"
+    end
+
+    self.scenes = kept
+    self:sort_and_reindex()
+    return true, deleted_count
+end
+
 --- Update existing scene by ID, re-sort and re-index
 -- @param id number Scene ID to update
 -- @param start_tc TimeCode
@@ -845,18 +878,30 @@ local function wrap_status_text(text, max_len, max_lines)
     return table.concat(out_lines, "<br>")
 end
 
+local function html_escape(str)
+    return (tostring(str or "")
+        :gsub("&", "&amp;")
+        :gsub("<", "&lt;")
+        :gsub(">", "&gt;")
+        :gsub('"', "&quot;"))
+end
+
 local app = {
-    repo          = nil,
-    dlg           = nil,
-    workdir_input = nil,
-    path_input    = nil,
-    list          = nil,
-    start_input   = nil,
-    end_input     = nil,
-    title_input   = nil,
-    status_box       = nil,
-    status_label     = nil, -- retained for backward-compatibility in test mocks
-    editing_scene_id = nil
+    repo               = nil,
+    dlg                = nil,
+    workdir_input      = nil,
+    path_input         = nil,
+    list               = nil,
+    start_input        = nil,
+    end_input          = nil,
+    title_input        = nil,
+    status_box         = nil,
+    status_label       = nil, -- retained for backward-compatibility in test mocks
+    editing_scene      = nil,
+    editing_scene_id   = nil,
+    pending_delete_ids = nil,
+    loaded_video_path  = "",
+    loaded_scn_path    = ""
 }
 
 function app:set_status(msg, level)
@@ -869,7 +914,29 @@ function app:set_status(msg, level)
         color = "#e65100"
     end
 
-    local formatted = tostring(msg):gsub("\r?\n", "<br>")
+    local raw_lines = {}
+    local normalized = tostring(msg):gsub("<br%s*/?>", "\n")
+    for line in (normalized .. "\n"):gmatch("(.-)\r?\n") do
+        table.insert(raw_lines, line)
+    end
+    if #raw_lines > 1 and raw_lines[#raw_lines] == "" then
+        table.remove(raw_lines)
+    end
+
+    local display_lines = {}
+    local max_visible_lines = 4
+    if #raw_lines <= max_visible_lines then
+        for _, l in ipairs(raw_lines) do
+            table.insert(display_lines, html_escape(l))
+        end
+    else
+        for i = 1, max_visible_lines - 1 do
+            table.insert(display_lines, html_escape(raw_lines[i]))
+        end
+        table.insert(display_lines, "... (see log file for full details)")
+    end
+
+    local formatted = table.concat(display_lines, "<br>")
     local html = string.format("<div style='font-family:sans-serif; font-size:11px; margin:0; padding:0; line-height:1.3; word-wrap:break-word; color:%s;'>%s</div>", color, formatted)
 
     if self.status_box then
@@ -909,6 +976,14 @@ function app:get_scn_path()
     return p
 end
 
+function app:cancel_edit()
+    self.editing_scene = nil
+    self.editing_scene_id = nil
+    if self.start_input then self.start_input:set_text("") end
+    if self.end_input then self.end_input:set_text("") end
+    if self.title_input then self.title_input:set_text("") end
+end
+
 function app:refresh_list()
     if not self.list then return end
     self.list:clear()
@@ -920,6 +995,9 @@ function app:refresh_list()
 end
 
 function app:on_load_file()
+    self:cancel_edit()
+    self.pending_delete_ids = nil
+
     local path = self:get_scn_path()
     if not path or path == "" then
         self:set_status("⚠️ Please enter a valid .scn file path.")
@@ -934,6 +1012,9 @@ function app:on_load_file()
         self:set_status("❌ " .. tostring(res))
         return
     end
+
+    self.loaded_scn_path = path
+    self.loaded_video_path = VlcPlayerAdapter.get_video_path()
 
     self:refresh_list()
     local basename = path:match("([^\\/]+)$") or path
@@ -967,6 +1048,8 @@ function app:on_mark_end()
 end
 
 function app:on_save_scene()
+    self.pending_delete_ids = nil
+
     local path = self:get_scn_path()
     if not path or path == "" then
         self:set_status("⚠️ Target .scn file path is required to save scene.")
@@ -989,9 +1072,20 @@ function app:on_save_scene()
         return
     end
 
-    if self.editing_scene_id then
-        local edit_id = self.editing_scene_id
-        local ok, res = self.repo:update(edit_id, start_tc, end_tc, title)
+    if self.editing_scene or self.editing_scene_id then
+        local target_sc = self.editing_scene
+        if not target_sc and self.editing_scene_id then
+            target_sc = self.repo:get_by_id(self.editing_scene_id)
+        end
+
+        local current_sc = target_sc and self.repo:get_by_id(target_sc.id)
+        if not current_sc or current_sc ~= target_sc then
+            self:cancel_edit()
+            self:set_status("⚠️ The scene being edited was deleted or reloaded. Edit cancelled.", "warn")
+            return
+        end
+
+        local ok, res = self.repo:update(target_sc.id, start_tc, end_tc, title)
         if not ok then
             self:set_status("❌ " .. tostring(res))
             return
@@ -1004,7 +1098,7 @@ function app:on_save_scene()
             self:set_status(string.format("✅ Updated & saved Scene %d: '%s'", res.id, res.title))
         end
 
-        self.editing_scene_id = nil
+        self:cancel_edit()
     else
         if title:match("^%s*$") then
             title = string.format("Scene %d", self.repo:count() + 1)
@@ -1022,36 +1116,38 @@ function app:on_save_scene()
         else
             self:set_status(string.format("✅ Added & saved Scene %d: '%s'", res.id, res.title))
         end
+
+        if self.loaded_video_path == "" then
+            self.loaded_video_path = VlcPlayerAdapter.get_video_path()
+        end
+        if self.loaded_scn_path == "" then
+            self.loaded_scn_path = path
+        end
     end
 
     self:refresh_list()
-
-    -- Reset fragment inputs for next capture
-    if self.start_input then self.start_input:set_text("") end
-    if self.end_input then self.end_input:set_text("") end
-    if self.title_input then self.title_input:set_text("") end
+    self:cancel_edit()
 end
 
 -- Backward compatibility alias
 app.on_add_scene = app.on_save_scene
 
 function app:on_edit_selected()
-    local sc, err = self:get_selected_scene()
+    self.pending_delete_ids = nil
+    local sc, err = self:get_selected_scene("Edit")
     if not sc then
         self:set_status("⚠️ " .. err)
         return
     end
 
     -- Toggle edit mode off if already editing this exact scene
-    if self.editing_scene_id == sc.id then
-        self.editing_scene_id = nil
-        if self.start_input then self.start_input:set_text("") end
-        if self.end_input then self.end_input:set_text("") end
-        if self.title_input then self.title_input:set_text("") end
+    if self.editing_scene == sc or self.editing_scene_id == sc.id then
+        self:cancel_edit()
         self:set_status(string.format("Cancelled editing Scene %d.", sc.id))
         return
     end
 
+    self.editing_scene = sc
     self.editing_scene_id = sc.id
     if self.start_input then self.start_input:set_text(sc.start_tc:to_string(true, ",")) end
     if self.end_input then self.end_input:set_text(sc.end_tc:to_string(true, ",")) end
@@ -1059,27 +1155,48 @@ function app:on_edit_selected()
     self:set_status(string.format("✏️ Editing Scene %d: modify Start, End, or Title, then click Add / Save Scene (or click ✏️ Edit to cancel).", sc.id))
 end
 
-function app:get_selected_scene()
+function app:get_selected_scenes()
+    if not self.list then return {} end
+    local sel = self.list:get_selection()
+    if not sel or next(sel) == nil then
+        return {}
+    end
+
+    local scenes = {}
+    for id_key, _ in pairs(sel) do
+        local id_num = tonumber(id_key)
+        if id_num and id_num > 0 then
+            local sc = self.repo:get_by_id(id_num)
+            if sc then
+                table.insert(scenes, sc)
+            end
+        end
+    end
+
+    table.sort(scenes, function(a, b) return a.start_tc < b.start_tc end)
+    return scenes
+end
+
+function app:get_selected_scene(action_name)
     if not self.list then return nil end
     local sel = self.list:get_selection()
     if not sel or next(sel) == nil then
         return nil, "No scene selected from the list"
     end
 
-    local selected_id = next(sel)
-    if selected_id == 0 then
+    local scenes = self:get_selected_scenes()
+    if #scenes == 0 then
         return nil, "Header row selected; please select a scene row"
+    elseif #scenes > 1 then
+        action_name = action_name or "This action"
+        return nil, string.format("Multiple scenes selected (%d selected); '%s' only applies to a single scene.", #scenes, action_name)
     end
-
-    local sc = self.repo:get_by_id(selected_id)
-    if not sc then
-        return nil, "Scene not found for ID: " .. tostring(selected_id)
-    end
-    return sc
+    return scenes[1]
 end
 
 function app:on_jump_to_start()
-    local sc, err = self:get_selected_scene()
+    self.pending_delete_ids = nil
+    local sc, err = self:get_selected_scene("To Start")
     if not sc then
         self:set_status("⚠️ " .. err)
         return
@@ -1094,7 +1211,8 @@ function app:on_jump_to_start()
 end
 
 function app:on_jump_to_end()
-    local sc, err = self:get_selected_scene()
+    self.pending_delete_ids = nil
+    local sc, err = self:get_selected_scene("To End")
     if not sc then
         self:set_status("⚠️ " .. err)
         return
@@ -1109,9 +1227,10 @@ function app:on_jump_to_end()
 end
 
 function app:on_cut_selected()
-    local sc, err = self:get_selected_scene()
-    if not sc then
-        self:set_status("⚠️ " .. err, "warn")
+    self.pending_delete_ids = nil
+    local scenes = self:get_selected_scenes()
+    if #scenes == 0 then
+        self:set_status("⚠️ Please select one or more scenes from the list", "warn")
         return
     end
 
@@ -1121,29 +1240,87 @@ function app:on_cut_selected()
         return
     end
 
+    -- Video mismatch guard
+    if self.loaded_video_path ~= "" and video_path ~= self.loaded_video_path then
+        local old_name = self.loaded_video_path:match("([^\\/]+)$") or self.loaded_video_path
+        local cur_name = video_path:match("([^\\/]+)$") or video_path
+        self:set_status(string.format("❌ Video mismatch: Loaded scenes belong to '%s', but VLC is playing '%s'. Please reload the .scn file.", old_name, cur_name), "error")
+        return
+    end
+
     local work_dir = self:get_work_dir()
-    local ok, res = CutterService.cut_scene(video_path, sc, nil, work_dir)
-    if not ok then
-        self:set_status("❌ Cut failed: " .. tostring(res), "error")
+    local cut_count = 0
+    local failed = {}
+
+    for i, sc in ipairs(scenes) do
+        if #scenes > 1 then
+            self:set_status(string.format("⏳ Cutting scene %d of %d: '%s'...", i, #scenes, sc.title))
+            if self.dlg and self.dlg.update then self.dlg:update() end
+        end
+
+        local ok, res = CutterService.cut_scene(video_path, sc, nil, work_dir)
+        if ok then
+            cut_count = cut_count + 1
+        else
+            table.insert(failed, string.format("Scene %d: %s", sc.id, tostring(res)))
+        end
+    end
+
+    if #failed > 0 then
+        local err_summary = table.concat(failed, "\n")
+        self:set_status(string.format("⚠️ Cut %d of %d scene(s). Errors:\n%s", cut_count, #scenes, err_summary), "error")
     else
-        local basename = res:match("([^\\/]+)$") or res
-        self:set_status(string.format("✅ Scene %d cut complete: %s\nSaved to: %s", sc.id, basename, res), "success")
+        if #scenes == 1 then
+            local sc = scenes[1]
+            local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
+            local basename = out_path:match("([^\\/]+)$") or out_path
+            self:set_status(string.format("✅ Scene %d cut complete: %s\nSaved to: %s", sc.id, basename, out_path), "success")
+        else
+            local target_dir = work_dir ~= "" and work_dir or (video_path:match("^(.*[\\/])") or "working directory")
+            self:set_status(string.format("✅ Batch cut complete: all %d scenes cut successfully!\nSaved to: %s", cut_count, target_dir), "success")
+        end
     end
 end
 
 function app:on_delete_selected()
-    local sc, err = self:get_selected_scene()
-    if not sc then
-        self:set_status("⚠️ " .. err)
+    local scenes = self:get_selected_scenes()
+    if #scenes == 0 then
+        self:set_status("⚠️ Please select one or more scenes to delete", "warn")
+        self.pending_delete_ids = nil
         return
     end
 
-    local del_id = sc.id
-    local del_title = sc.title
+    local ids = {}
+    for _, sc in ipairs(scenes) do
+        table.insert(ids, sc.id)
+    end
 
-    local ok, res = self.repo:delete(del_id)
+    -- If deleting multiple scenes, require 2-step confirmation
+    if #scenes > 1 then
+        local is_confirmed = false
+        if self.pending_delete_ids and #self.pending_delete_ids == #ids then
+            is_confirmed = true
+            for i, id in ipairs(ids) do
+                if self.pending_delete_ids[i] ~= id then
+                    is_confirmed = false
+                    break
+                end
+            end
+        end
+
+        if not is_confirmed then
+            self.pending_delete_ids = ids
+            self:set_status(string.format("⚠️ Delete %d scenes? Click 🗑️ Delete again to confirm (or click any other button to cancel).", #ids), "warn")
+            return
+        end
+    end
+
+    self.pending_delete_ids = nil
+    self:cancel_edit()
+
+    local ok, res = self.repo:delete_many(ids)
     if not ok then
-        self:set_status("❌ " .. tostring(res))
+        self:set_status("❌ " .. tostring(res), "error")
         return
     end
 
@@ -1151,12 +1328,20 @@ function app:on_delete_selected()
     if path and path ~= "" then
         local save_ok, save_err = self.repo:save(path)
         if not save_ok then
-            self:set_status("⚠️ Deleted in memory, but failed to save file: " .. tostring(save_err))
+            self:set_status(string.format("⚠️ Deleted %d scene(s) in memory, but failed to save file: %s", res, tostring(save_err)))
         else
-            self:set_status(string.format("🗑️ Deleted Scene %d: '%s'", del_id, del_title))
+            if #scenes == 1 then
+                self:set_status(string.format("🗑️ Deleted Scene %d: '%s'", scenes[1].id, scenes[1].title))
+            else
+                self:set_status(string.format("🗑️ Deleted %d scenes and reindexed remaining scenes in .scn", res))
+            end
         end
     else
-        self:set_status(string.format("🗑️ Deleted Scene %d: '%s'.", del_id, del_title))
+        if #scenes == 1 then
+            self:set_status(string.format("🗑️ Deleted Scene %d: '%s'.", scenes[1].id, scenes[1].title))
+        else
+            self:set_status(string.format("🗑️ Deleted %d scene(s).", res))
+        end
     end
 
     self:refresh_list()
@@ -1238,6 +1423,10 @@ function activate()
     -- Row 16: Fixed-height Scrollable & Copyable Status Area (QTextBrowser, height ~75-80px / ~4 lines, scrollbar as needed)
     app.status_box = app.dlg:add_html("<div style='font-family:sans-serif; font-size:11px; margin:0; padding:0; color:#666;'>Ready. Load an .scn file or mark fragment timestamps.</div>", 1, 16, 5, 1)
 
+    -- Track active context
+    app.loaded_video_path = VlcPlayerAdapter.get_video_path()
+    app.loaded_scn_path = initial_path
+
     -- Auto-load if .scn file exists at guessed path
     if initial_path ~= "" then
         local f = io.open(initial_path, "r")
@@ -1309,7 +1498,11 @@ function deactivate()
     app.title_input = nil
     app.status_box = nil
     app.status_label = nil
+    app.editing_scene = nil
     app.editing_scene_id = nil
+    app.pending_delete_ids = nil
+    app.loaded_video_path = ""
+    app.loaded_scn_path = ""
     app.repo = nil
 end
 
@@ -1329,6 +1522,7 @@ if _G and _G.__TEST__ then
         CutterService    = CutterService,
         VlcPlayerAdapter = VlcPlayerAdapter,
         app              = app,
-        wrap_status_text = wrap_status_text
+        wrap_status_text = wrap_status_text,
+        html_escape      = html_escape
     }
 end

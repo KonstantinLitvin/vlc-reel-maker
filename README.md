@@ -114,8 +114,8 @@ or place `ffmpeg.exe` into `%APPDATA%\vlc\bin\`.
      - `[ ▶ To Start ]`: Seeks playback to the scene start.
      - `[ ⏹ To End ]`: Seeks playback to the scene end.
      - `[ ✏️ Edit ]`: Loads the selected scene into the input fields for in-place editing; click `[ ➕ Add / Save Scene ]` to update or `[ ✏️ Edit ]` again to cancel.
-     - `[ ✂️ Cut ]`: Cuts the selected fragment synchronously using FFmpeg into your working directory.
-     - `[ 🗑️ Delete ]`: Removes the scene, reindexes remaining scenes sequentially, and updates the `.scn` file.
+     - `[ ✂️ Cut ]`: Cuts the selected scene(s) synchronously using FFmpeg into your working directory (supports selecting multiple scenes with Ctrl/Shift for batch cutting with live GUI progress).
+     - `[ 🗑️ Delete ]`: Atomically removes the selected scene(s), reindexes remaining scenes sequentially, and updates the `.scn` file (includes 2-step confirmation prompt when deleting multiple scenes).
 6. **Batch Export**:
    - Click `[ 📄 Export Cut Script ]` to create a `movie_cut_scenes.sh` (or `.bat`) batch script inside your working directory.
 

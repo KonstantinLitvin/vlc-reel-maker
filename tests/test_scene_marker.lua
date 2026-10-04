@@ -405,12 +405,20 @@ test("app:set_status scrollable & copyable status_box rich HTML formatting", fun
     assert_true(last_box_text:find("word-wrap:break-word", 1, true) ~= nil, "Uses fluid CSS word-wrap:break-word")
     assert_true(last_box_text:find("<br>", 1, true) == nil, "Single line message has no artificial <br> breaks")
 
-    -- Multi-line error preserves all lines for vertical scrollbar
+    -- Multi-line error is clamped to 4 visible lines to prevent distorting rich text label
     local multi_err = "❌ FFmpeg cut error:\nLine 2 details\nLine 3 details\nLine 4 details\nLine 5 overflow\nLine 6 overflow"
     app:set_status(multi_err, "error")
     local count = 1
     for _ in last_box_text:gmatch("<br>") do count = count + 1 end
-    assert_eq(count, 6, "All 6 lines preserved for scrollable QTextBrowser")
+    assert_eq(count, 4, "Clamped to 4 lines max to prevent dialog distortion")
+    assert_true(last_box_text:find("log file", 1, true) ~= nil, "Refers to log file on clamp")
+
+    -- HTML entities escaping
+    local unescaped_msg = "⚠️ Testing <encoder> & \"special\" characters"
+    app:set_status(unescaped_msg, "warn")
+    assert_true(last_box_text:find("&lt;encoder&gt;", 1, true) ~= nil, "HTML < and > escaped")
+    assert_true(last_box_text:find("&amp;", 1, true) ~= nil, "HTML & escaped")
+    assert_true(last_box_text:find("&quot;", 1, true) ~= nil, "HTML quotes escaped")
 
     -- Success message formatting with Cyrillic preserves full line without artificial line breaks
     local succ_msg = "✅ Loaded 2 scene(s) from Мераб Мамардашвили - Что такое любовь.scn"
@@ -530,6 +538,141 @@ test("app:on_edit_selected and app:on_save_scene dual-mode workflow", function()
     assert_eq(title_val, "", "Inputs cleared when edit mode cancelled")
 
     os.remove(tmp_scn)
+end)
+
+test("SceneRepository:delete_many deletes multiple scenes atomically and reindexes", function()
+    local repo = SceneRepository.new()
+    repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Scene 1")
+    repo:add(TimeCode.from_seconds(30), TimeCode.from_seconds(40), "Scene 2")
+    repo:add(TimeCode.from_seconds(50), TimeCode.from_seconds(60), "Scene 3")
+    repo:add(TimeCode.from_seconds(70), TimeCode.from_seconds(80), "Scene 4")
+
+    -- Delete scenes 2 and 3 atomically
+    local ok, count = repo:delete_many({2, 3})
+    assert_true(ok, "delete_many succeeds")
+    assert_eq(count, 2, "Deleted 2 scenes")
+    assert_eq(repo:count(), 2, "2 scenes remain")
+    assert_eq(repo:get_by_id(1).title, "Scene 1", "Scene 1 remains as ID 1")
+    assert_eq(repo:get_by_id(2).title, "Scene 4", "Scene 4 reindexed to ID 2")
+
+    -- Attempt to delete non-existent IDs
+    local bad_ok, bad_err = repo:delete_many({99, 100})
+    assert_true(not bad_ok, "delete_many fails for non-existent IDs")
+end)
+
+test("Multi-selection handling: get_selected_scenes, batch cut and batch delete", function()
+    local app = T.app
+    local repo = SceneRepository.new()
+    repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Scene 1")
+    repo:add(TimeCode.from_seconds(30), TimeCode.from_seconds(40), "Scene 2")
+    repo:add(TimeCode.from_seconds(50), TimeCode.from_seconds(60), "Scene 3")
+    app.repo = repo
+
+    -- Mock list selection
+    local cur_selection = {}
+    app.list = {
+        get_selection = function() return cur_selection end,
+        clear = function() end,
+        add_value = function() end
+    }
+
+    local last_status = nil
+    app.set_status = function(self, msg) last_status = msg end
+
+    -- 1. No selection
+    cur_selection = {}
+    assert_eq(#app:get_selected_scenes(), 0, "No scenes returned")
+    local single, err = app:get_selected_scene()
+    assert_true(single == nil and err:find("No scene selected", 1, true) ~= nil, "Single select returns no scene error")
+
+    -- 2. Header row selected (ID 0)
+    cur_selection = { [0] = "ID Start End Title" }
+    assert_eq(#app:get_selected_scenes(), 0, "Header row excluded")
+    single, err = app:get_selected_scene()
+    assert_true(single == nil and err:find("Header row selected", 1, true) ~= nil, "Header row error reported")
+
+    -- 3. Multi-selection: IDs 1 and 3 selected (plus header 0)
+    cur_selection = { [0] = "Header", [1] = "Scene 1", [3] = "Scene 3" }
+    local scenes = app:get_selected_scenes()
+    assert_eq(#scenes, 2, "2 scenes returned")
+    assert_eq(scenes[1].id, 1, "First is Scene 1")
+    assert_eq(scenes[2].id, 3, "Second is Scene 3")
+
+    -- get_selected_scene guards against multiple selection for edit/jump
+    single, err = app:get_selected_scene()
+    assert_true(single == nil and err:find("Multiple scenes selected", 1, true) ~= nil, "Multiple scenes guarded against single-select")
+
+    -- 4. Batch delete requires 2-step confirmation for >1 scenes
+    app:on_delete_selected()
+    assert_true(last_status:find("Click 🗑️ Delete again to confirm", 1, true) ~= nil, "First click asks for confirmation")
+    assert_eq(repo:count(), 3, "Scenes not yet deleted before confirmation")
+
+    -- Second click executes deletion
+    app:on_delete_selected()
+    assert_true(last_status:find("Deleted 2 scenes", 1, true) ~= nil, "Batch delete status reported after confirmation")
+    assert_eq(repo:count(), 1, "Only 1 scene remaining")
+    assert_eq(repo:get_by_id(1).title, "Scene 2", "Old Scene 2 reindexed to ID 1")
+end)
+
+test("Edit mode reference tracking and invalidation on delete or file reload", function()
+    local app = T.app
+    local repo = SceneRepository.new()
+    repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Scene 1")
+    repo:add(TimeCode.from_seconds(30), TimeCode.from_seconds(40), "Scene 2")
+    app.repo = repo
+
+    local cur_sel = { [2] = "Scene 2" }
+    app.list = {
+        get_selection = function() return cur_sel end,
+        clear = function() end,
+        add_value = function() end
+    }
+
+    local s_text, e_text, t_text = "", "", ""
+    app.start_input = { get_text = function() return s_text end, set_text = function(self, t) s_text = t end }
+    app.end_input   = { get_text = function() return e_text end, set_text = function(self, t) e_text = t end }
+    app.title_input = { get_text = function() return t_text end, set_text = function(self, t) t_text = t end }
+    app.status_box  = { set_text = function() end }
+
+    -- Enter edit mode for Scene 2
+    app:on_edit_selected()
+    assert_eq(app.editing_scene.title, "Scene 2", "Editing Scene 2 reference tracked")
+
+    -- Deleting scene 1 reindexes Scene 2 to ID 1, but edit mode is cancelled cleanly
+    cur_sel = { [1] = "Scene 1" }
+    app:on_delete_selected()
+    assert_eq(app.editing_scene, nil, "Edit mode cancelled on deletion")
+    assert_eq(app.editing_scene_id, nil, "editing_scene_id cancelled on deletion")
+    assert_eq(t_text, "", "Inputs cleared on edit cancellation")
+end)
+
+test("Video context mismatch guard in app:on_cut_selected", function()
+    local app = T.app
+    local repo = SceneRepository.new()
+    repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Scene 1")
+    app.repo = repo
+
+    app.list = {
+        get_selection = function() return { [1] = "Scene 1" } end,
+        clear = function() end,
+        add_value = function() end
+    }
+
+    local last_status = nil
+    app.set_status = function(self, msg) last_status = msg end
+
+    -- Loaded scenes belong to video_A.mp4
+    app.loaded_video_path = "/media/video_A.mp4"
+
+    -- Mock VlcPlayerAdapter to return video_B.mp4 (playlist advanced)
+    local old_get_video = T.VlcPlayerAdapter.get_video_path
+    T.VlcPlayerAdapter.get_video_path = function() return "/media/video_B.mp4" end
+
+    app:on_cut_selected()
+    assert_true(last_status:find("Video mismatch", 1, true) ~= nil, "Cut blocked due to video mismatch")
+
+    -- Restore mock
+    T.VlcPlayerAdapter.get_video_path = old_get_video
 end)
 
 print("--------------------------------------------------")
