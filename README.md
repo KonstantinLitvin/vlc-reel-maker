@@ -9,6 +9,7 @@ A modern, VLC media player extension written in Lua for video fragment capture, 
 - **⏱️ Mark In & Mark Out**: Capture current playback timestamps with millisecond accuracy directly from playing media.
 - **💾 Automatic `.scn` Persistence**: Auto-guesses the `.scn` file location based on video file path, parses subtitle-like scene blocks, and saves updates.
 - **🔄 Auto-Sorting & Reindexing**: Newly captured scenes are sorted chronologically and assigned sequential IDs (1..N).
+- **✏️ In-Place Scene Editing**: Select any scene and click **Edit** to populate Start, End, and Title fields, adjust boundaries or text, and update via the dual-mode **Add / Save Scene** button.
 - **▶ Non-Blocking Navigation**: Jump to scene Start or End timestamps instantly without VLC interface thread locks.
 - **✂️ FFmpeg Video Cutting**:
   - **Cut Selected Scene**: Executes an ultra-fast, lossless stream copy (`-c copy`) with verified exit status, output file validation, and error log diagnostics.
@@ -107,12 +108,13 @@ or place `ffmpeg.exe` into `%APPDATA%\vlc\bin\`.
    - Click `[ ⏱️ Mark Start (In) ]` at the fragment start.
    - Click `[ ⏱️ Mark End (Out) ]` at the fragment end.
    - Enter a title (or leave blank for auto-generated `Scene N`).
-   - Click `[ ➕ Add & Save Scene ]`.
+   - Click `[ ➕ Add / Save Scene ]`.
 5. **Managing Selected Scenes**:
-   - Select any scene row in the list to enable the toolbar:
-     - `[ ▶ Jump Start ]`: Seeks playback to the scene start.
-     - `[ ⏹ Jump End ]`: Seeks playback to the scene end.
-     - `[ ✂️ Cut ]`: Cuts the selected fragment in the background using FFmpeg into your working directory.
+   - Select any scene row in the list to enable the action toolbar:
+     - `[ ▶ To Start ]`: Seeks playback to the scene start.
+     - `[ ⏹ To End ]`: Seeks playback to the scene end.
+     - `[ ✏️ Edit ]`: Loads the selected scene into the input fields for in-place editing; click `[ ➕ Add / Save Scene ]` to update or `[ ✏️ Edit ]` again to cancel.
+     - `[ ✂️ Cut ]`: Cuts the selected fragment synchronously using FFmpeg into your working directory.
      - `[ 🗑️ Delete ]`: Removes the scene, reindexes remaining scenes sequentially, and updates the `.scn` file.
 6. **Batch Export**:
    - Click `[ 📄 Export Cut Script ]` to create a `movie_cut_scenes.sh` (or `.bat`) batch script inside your working directory.

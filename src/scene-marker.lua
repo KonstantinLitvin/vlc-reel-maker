@@ -131,9 +131,11 @@ function Scene:duration()
     return self.end_tc.total_sec - self.start_tc.total_sec
 end
 
+Scene.TABLE_HEADER = "ID   Start                   End                     Title"
+
 function Scene:to_table_row()
     return string.format(
-        "%-4d %-12s %-12s %-30s",
+        "%-3d   %s   %s   %s",
         self.id,
         self.start_tc:to_string(true, ","),
         self.end_tc:to_string(true, ","),
@@ -659,6 +661,31 @@ function SceneRepository:delete(id)
     return true, deleted
 end
 
+--- Update existing scene by ID, re-sort and re-index
+-- @param id number Scene ID to update
+-- @param start_tc TimeCode
+-- @param end_tc TimeCode
+-- @param title string
+-- @return boolean, Scene|string ok, updated_scene_or_error
+function SceneRepository:update(id, start_tc, end_tc, title)
+    local sc = self:get_by_id(id)
+    if not sc then
+        return false, "Scene not found for ID: " .. tostring(id)
+    end
+
+    if end_tc <= start_tc then
+        return false, "End time must be greater than Start time"
+    end
+
+    sc.start_tc = start_tc
+    sc.end_tc = end_tc
+    if title and title:match("%S") then
+        sc.title = title:match("^%s*(.-)%s*$")
+    end
+    self:sort_and_reindex()
+    return true, sc
+end
+
 function SceneRepository:count()
     return #self.scenes
 end
@@ -827,8 +854,9 @@ local app = {
     start_input   = nil,
     end_input     = nil,
     title_input   = nil,
-    status_box    = nil,
-    status_label  = nil -- retained for backward-compatibility in test mocks
+    status_box       = nil,
+    status_label     = nil, -- retained for backward-compatibility in test mocks
+    editing_scene_id = nil
 }
 
 function app:set_status(msg, level)
@@ -841,8 +869,8 @@ function app:set_status(msg, level)
         color = "#e65100"
     end
 
-    local wrapped = wrap_status_text(msg, 55)
-    local html = string.format("<div style='font-family:sans-serif; font-size:11px; margin:0; padding:0; line-height:1.3; color:%s;'>%s</div>", color, wrapped)
+    local formatted = tostring(msg):gsub("\r?\n", "<br>")
+    local html = string.format("<div style='font-family:sans-serif; font-size:11px; margin:0; padding:0; line-height:1.3; word-wrap:break-word; color:%s;'>%s</div>", color, formatted)
 
     if self.status_box then
         self.status_box:set_text(html)
@@ -884,7 +912,7 @@ end
 function app:refresh_list()
     if not self.list then return end
     self.list:clear()
-    self.list:add_value(string.format("%-4s %-12s %-12s %-30s", "ID", "Start", "End", "Title"), 0)
+    self.list:add_value(Scene.TABLE_HEADER, 0)
 
     for _, sc in ipairs(self.repo.scenes) do
         self.list:add_value(sc:to_table_row(), sc.id)
@@ -901,7 +929,7 @@ function app:on_load_file()
     local ok, res = self.repo:load(path)
     if not ok then
         self.list:clear()
-        self.list:add_value(string.format("%-4s %-12s %-12s %-30s", "ID", "Start", "End", "Title"), 0)
+        self.list:add_value(Scene.TABLE_HEADER, 0)
         self.list:add_value("Could not open file.", 1)
         self:set_status("❌ " .. tostring(res))
         return
@@ -938,7 +966,7 @@ function app:on_mark_end()
     end
 end
 
-function app:on_add_scene()
+function app:on_save_scene()
     local path = self:get_scn_path()
     if not path or path == "" then
         self:set_status("⚠️ Target .scn file path is required to save scene.")
@@ -961,21 +989,39 @@ function app:on_add_scene()
         return
     end
 
-    if title:match("^%s*$") then
-        title = string.format("Scene %d", self.repo:count() + 1)
-    end
+    if self.editing_scene_id then
+        local edit_id = self.editing_scene_id
+        local ok, res = self.repo:update(edit_id, start_tc, end_tc, title)
+        if not ok then
+            self:set_status("❌ " .. tostring(res))
+            return
+        end
 
-    local ok, res = self.repo:add(start_tc, end_tc, title)
-    if not ok then
-        self:set_status("❌ " .. tostring(res))
-        return
-    end
+        local save_ok, save_err = self.repo:save(path)
+        if not save_ok then
+            self:set_status("⚠️ Updated in memory, but failed to save file: " .. tostring(save_err))
+        else
+            self:set_status(string.format("✅ Updated & saved Scene %d: '%s'", res.id, res.title))
+        end
 
-    local save_ok, save_err = self.repo:save(path)
-    if not save_ok then
-        self:set_status("⚠️ Added in memory, but failed to save file: " .. tostring(save_err))
+        self.editing_scene_id = nil
     else
-        self:set_status(string.format("✅ Added & saved Scene %d: '%s'", res.id, res.title))
+        if title:match("^%s*$") then
+            title = string.format("Scene %d", self.repo:count() + 1)
+        end
+
+        local ok, res = self.repo:add(start_tc, end_tc, title)
+        if not ok then
+            self:set_status("❌ " .. tostring(res))
+            return
+        end
+
+        local save_ok, save_err = self.repo:save(path)
+        if not save_ok then
+            self:set_status("⚠️ Added in memory, but failed to save file: " .. tostring(save_err))
+        else
+            self:set_status(string.format("✅ Added & saved Scene %d: '%s'", res.id, res.title))
+        end
     end
 
     self:refresh_list()
@@ -984,6 +1030,33 @@ function app:on_add_scene()
     if self.start_input then self.start_input:set_text("") end
     if self.end_input then self.end_input:set_text("") end
     if self.title_input then self.title_input:set_text("") end
+end
+
+-- Backward compatibility alias
+app.on_add_scene = app.on_save_scene
+
+function app:on_edit_selected()
+    local sc, err = self:get_selected_scene()
+    if not sc then
+        self:set_status("⚠️ " .. err)
+        return
+    end
+
+    -- Toggle edit mode off if already editing this exact scene
+    if self.editing_scene_id == sc.id then
+        self.editing_scene_id = nil
+        if self.start_input then self.start_input:set_text("") end
+        if self.end_input then self.end_input:set_text("") end
+        if self.title_input then self.title_input:set_text("") end
+        self:set_status(string.format("Cancelled editing Scene %d.", sc.id))
+        return
+    end
+
+    self.editing_scene_id = sc.id
+    if self.start_input then self.start_input:set_text(sc.start_tc:to_string(true, ",")) end
+    if self.end_input then self.end_input:set_text(sc.end_tc:to_string(true, ",")) end
+    if self.title_input then self.title_input:set_text(sc.title) end
+    self:set_status(string.format("✏️ Editing Scene %d: modify Start, End, or Title, then click Add / Save Scene (or click ✏️ Edit to cancel).", sc.id))
 end
 
 function app:get_selected_scene()
@@ -1138,29 +1211,29 @@ function activate()
 
     -- Rows 4-11: Scenes list view (height 8)
     app.list = app.dlg:add_list(1, 4, 5, 8)
-    app.list:add_value(string.format("%-4s %-12s %-12s %-30s", "ID", "Start", "End", "Title"), 0)
+    app.list:add_value(Scene.TABLE_HEADER, 0)
 
-    -- Row 12: Selected Scene Action Toolbar (directly under the list!)
-    app.dlg:add_label("<b>Selected:</b>", 1, 12, 1, 1)
-    app.dlg:add_button("▶ Jump Start", function() app:on_jump_to_start() end,   2, 12, 1, 1)
-    app.dlg:add_button("⏹ Jump End",   function() app:on_jump_to_end() end,     3, 12, 1, 1)
-    app.dlg:add_button("✂️ Cut",        function() app:on_cut_selected() end,    4, 12, 1, 1)
-    app.dlg:add_button("🗑️ Delete",     function() app:on_delete_selected() end, 5, 12, 1, 1)
+    -- Row 12: Scene Action Toolbar (directly under the list)
+    app.dlg:add_button("▶ To Start", function() app:on_jump_to_start() end,   1, 12, 1, 1)
+    app.dlg:add_button("⏹ To End",   function() app:on_jump_to_end() end,     2, 12, 1, 1)
+    app.dlg:add_button("✏️ Edit",     function() app:on_edit_selected() end,   3, 12, 1, 1)
+    app.dlg:add_button("✂️ Cut",      function() app:on_cut_selected() end,    4, 12, 1, 1)
+    app.dlg:add_button("🗑️ Delete",   function() app:on_delete_selected() end, 5, 12, 1, 1)
 
     -- Row 13: Fragment Start input & Mark Start button
     app.dlg:add_label("<b>Start:</b>", 1, 13, 1, 1)
     app.start_input = app.dlg:add_text_input("", 2, 13, 2, 1)
-    app.dlg:add_button("⏱️ Mark Start (In)", function() app:on_mark_start() end, 4, 13, 2, 1)
+    app.dlg:add_button("⏱️ Mark Start", function() app:on_mark_start() end, 4, 13, 2, 1)
 
     -- Row 14: Fragment End input & Mark End button
     app.dlg:add_label("<b>End:</b>", 1, 14, 1, 1)
     app.end_input = app.dlg:add_text_input("", 2, 14, 2, 1)
-    app.dlg:add_button("⏱️ Mark End (Out)", function() app:on_mark_end() end, 4, 14, 2, 1)
+    app.dlg:add_button("⏱️ Mark End", function() app:on_mark_end() end, 4, 14, 2, 1)
 
-    -- Row 15: Scene Title input & Add Scene button
+    -- Row 15: Scene Title input & Add/Save Scene button
     app.dlg:add_label("<b>Title:</b>", 1, 15, 1, 1)
     app.title_input = app.dlg:add_text_input("", 2, 15, 2, 1)
-    app.dlg:add_button("➕ Add & Save Scene", function() app:on_add_scene() end, 4, 15, 2, 1)
+    app.dlg:add_button("➕ Add / Save Scene", function() app:on_save_scene() end, 4, 15, 2, 1)
 
     -- Row 16: Fixed-height Scrollable & Copyable Status Area (QTextBrowser, height ~75-80px / ~4 lines, scrollbar as needed)
     app.status_box = app.dlg:add_html("<div style='font-family:sans-serif; font-size:11px; margin:0; padding:0; color:#666;'>Ready. Load an .scn file or mark fragment timestamps.</div>", 1, 16, 5, 1)
@@ -1177,11 +1250,12 @@ end
 
 function menu()
     return {
-        "⏱️ Mark Start (In)",
-        "⏱️ Mark End (Out)",
-        "➕ Add & Save Scene",
-        "▶ Jump to Selected Start",
-        "⏹ Jump to Selected End",
+        "⏱️ Mark Start",
+        "⏱️ Mark End",
+        "➕ Add / Save Scene",
+        "▶ Jump to Start",
+        "⏹ Jump to End",
+        "✏️ Edit Selected Scene",
         "✂️ Cut Selected Scene",
         "🗑️ Delete Selected Scene",
         "📄 Export Cut Script"
@@ -1206,16 +1280,18 @@ function trigger_menu(id)
     elseif id == 2 then
         app:on_mark_end()
     elseif id == 3 then
-        app:on_add_scene()
+        app:on_save_scene()
     elseif id == 4 then
         app:on_jump_to_start()
     elseif id == 5 then
         app:on_jump_to_end()
     elseif id == 6 then
-        app:on_cut_selected()
+        app:on_edit_selected()
     elseif id == 7 then
-        app:on_delete_selected()
+        app:on_cut_selected()
     elseif id == 8 then
+        app:on_delete_selected()
+    elseif id == 9 then
         app:on_export_script()
     end
 end
@@ -1233,6 +1309,7 @@ function deactivate()
     app.title_input = nil
     app.status_box = nil
     app.status_label = nil
+    app.editing_scene_id = nil
     app.repo = nil
 end
 

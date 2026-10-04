@@ -178,6 +178,14 @@ test("Scene:to_scn_block formatting", function()
     assert_eq(block, expected, "SCN block matches specification")
 end)
 
+test("Scene.TABLE_HEADER and Scene:to_table_row formatting", function()
+    assert_true(Scene.TABLE_HEADER ~= nil, "TABLE_HEADER constant exists")
+    assert_eq(Scene.TABLE_HEADER, "ID   Start                   End                     Title", "TABLE_HEADER content matches")
+    local sc = Scene.new(1, TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Intro")
+    local row = sc:to_table_row()
+    assert_eq(row, "1     00:00:10,000   00:00:20,000   Intro", "Row format matches calibrated layout")
+end)
+
 -- 3. SceneRepository tests
 test("SceneRepository: load, sort out-of-order, reindex, save", function()
     local tmp_path = "/tmp/test_repo_" .. tostring(os.time()) .. ".scn"
@@ -231,7 +239,7 @@ test("Extension descriptor and menu() hooks", function()
 
     local m = menu()
     assert_true(type(m) == "table", "Menu returns table")
-    assert_eq(#m, 8, "Menu has exactly 8 clean functional actions")
+    assert_eq(#m, 9, "Menu has exactly 9 clean functional actions")
     assert_true(m[1]:find("Mark Start", 1, true) ~= nil, "First menu item is Mark Start")
 
     for i, item in ipairs(m) do
@@ -389,12 +397,13 @@ test("app:set_status scrollable & copyable status_box rich HTML formatting", fun
         end
     }
 
-    -- Long error message with full path is preserved with wrapping without truncation
+    -- Long single-line error message with full path preserves full details without artificial <br> line breaks
     local long_err = "❌ Failed to save file: /home/konstantin/Documents/PythonProjects/scene-maker/very/long/nested/path/to/movie.scn (Permission denied)"
     app:set_status(long_err, "error")
     assert_true(last_box_text:find("Permission denied", 1, true) ~= nil, "Full error details preserved")
     assert_true(last_box_text:find("color:#c62828", 1, true) ~= nil, "Error rendered with red color style")
-    assert_true(last_box_text:find("<br>", 1, true) ~= nil, "Long path wrapped with <br>")
+    assert_true(last_box_text:find("word-wrap:break-word", 1, true) ~= nil, "Uses fluid CSS word-wrap:break-word")
+    assert_true(last_box_text:find("<br>", 1, true) == nil, "Single line message has no artificial <br> breaks")
 
     -- Multi-line error preserves all lines for vertical scrollbar
     local multi_err = "❌ FFmpeg cut error:\nLine 2 details\nLine 3 details\nLine 4 details\nLine 5 overflow\nLine 6 overflow"
@@ -403,10 +412,11 @@ test("app:set_status scrollable & copyable status_box rich HTML formatting", fun
     for _ in last_box_text:gmatch("<br>") do count = count + 1 end
     assert_eq(count, 6, "All 6 lines preserved for scrollable QTextBrowser")
 
-    -- Success message formatting
-    local succ_msg = "✅ Cut complete: movie_scene_01.mp4"
+    -- Success message formatting with Cyrillic preserves full line without artificial line breaks
+    local succ_msg = "✅ Loaded 2 scene(s) from Мераб Мамардашвили - Что такое любовь.scn"
     app:set_status(succ_msg, "success")
-    assert_true(last_box_text:find("movie_scene_01.mp4", 1, true) ~= nil, "Success text preserved")
+    assert_true(last_box_text:find("Мераб Мамардашвили - Что такое любовь.scn", 1, true) ~= nil, "Cyrillic title preserved")
+    assert_true(last_box_text:find("<br>", 1, true) == nil, "No premature <br> in Cyrillic title")
     assert_true(last_box_text:find("color:#2e7d32", 1, true) ~= nil, "Success rendered with green color style")
 end)
 
@@ -434,6 +444,92 @@ test("app:get_scn_path resolves relative filenames with work_dir", function()
     -- Absolute path should remain untouched
     app.path_input.get_text = function() return "/custom/abs/path.scn" end
     assert_eq(app:get_scn_path(), "/custom/abs/path.scn", "Absolute path unchanged")
+end)
+
+test("SceneRepository:update validates and modifies existing scene", function()
+    local repo = SceneRepository.new()
+    repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Original 1")
+    repo:add(TimeCode.from_seconds(30), TimeCode.from_seconds(40), "Original 2")
+
+    -- Valid update
+    local ok, updated = repo:update(1, TimeCode.from_seconds(15), TimeCode.from_seconds(25), "Updated Title")
+    assert_true(ok, "Valid update succeeds")
+    assert_eq(updated.title, "Updated Title", "Title updated")
+    assert_eq(updated.start_tc.total_sec, 15, "Start timecode updated")
+    assert_eq(updated.end_tc.total_sec, 25, "End timecode updated")
+
+    -- Invalid update: end <= start rejected
+    local bad_ok, bad_err = repo:update(1, TimeCode.from_seconds(30), TimeCode.from_seconds(20), "Bad")
+    assert_true(not bad_ok, "End <= start rejected")
+    assert_true(bad_err:find("greater than", 1, true) ~= nil, "Appropriate error message")
+
+    -- Non-existent ID rejected
+    local missing_ok, missing_err = repo:update(999, TimeCode.from_seconds(1), TimeCode.from_seconds(2), "Missing")
+    assert_true(not missing_ok, "Missing ID rejected")
+end)
+
+test("app:on_edit_selected and app:on_save_scene dual-mode workflow", function()
+    local app = T.app
+    local repo = SceneRepository.new()
+    repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "First Scene")
+    app.repo = repo
+
+    local start_val, end_val, title_val = "", "", ""
+    app.start_input = {
+        get_text = function() return start_val end,
+        set_text = function(self, t) start_val = t end
+    }
+    app.end_input = {
+        get_text = function() return end_val end,
+        set_text = function(self, t) end_val = t end
+    }
+    app.title_input = {
+        get_text = function() return title_val end,
+        set_text = function(self, t) title_val = t end
+    }
+    app.list = {
+        get_selection = function() return { [1] = "Row 1" } end,
+        clear = function() end,
+        add_value = function() end
+    }
+    app.status_box = {
+        set_text = function() end
+    }
+    local tmp_scn = os.tmpname() .. ".scn"
+    app.path_input = {
+        get_text = function() return tmp_scn end
+    }
+
+    -- 1. Click edit: inputs populated with scene 1
+    app:on_edit_selected()
+    assert_eq(app.editing_scene_id, 1, "Edit mode active for scene 1")
+    assert_eq(start_val, "00:00:10,000", "Start input populated")
+    assert_eq(end_val, "00:00:20,000", "End input populated")
+    assert_eq(title_val, "First Scene", "Title input populated")
+
+    -- 2. Modify title and save
+    title_val = "Modified Scene 1"
+    app:on_save_scene()
+    assert_eq(app.editing_scene_id, nil, "Edit mode reset after save")
+    assert_eq(title_val, "", "Title input cleared after save")
+    assert_eq(repo:get_by_id(1).title, "Modified Scene 1", "Scene updated in repository")
+
+    -- 3. In normal mode (not editing), save creates a new scene
+    start_val = "00:00:30,000"
+    end_val = "00:00:40,000"
+    title_val = "Second Scene"
+    app:on_save_scene()
+    assert_eq(repo:count(), 2, "Second scene added via on_save_scene")
+    assert_eq(repo:get_by_id(2).title, "Second Scene", "Second scene title saved")
+
+    -- 4. Test toggling edit mode off
+    app:on_edit_selected()
+    assert_eq(app.editing_scene_id, 1, "Edit mode re-entered")
+    app:on_edit_selected()
+    assert_eq(app.editing_scene_id, nil, "Edit mode toggled off")
+    assert_eq(title_val, "", "Inputs cleared when edit mode cancelled")
+
+    os.remove(tmp_scn)
 end)
 
 print("--------------------------------------------------")
