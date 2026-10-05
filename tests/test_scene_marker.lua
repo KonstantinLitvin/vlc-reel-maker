@@ -675,6 +675,182 @@ test("Video context mismatch guard in app:on_cut_selected", function()
     T.VlcPlayerAdapter.get_video_path = old_get_video
 end)
 
+test("Platform.is_absolute and Platform.resolve_scn path resolution", function()
+    -- Platform.is_absolute
+    assert_true(Platform.is_absolute("/home/user/video.mp4", false), "POSIX absolute path detected")
+    assert_true(Platform.is_absolute("~/videos/video.mp4", false), "POSIX home path detected")
+    assert_true(not Platform.is_absolute("video.mp4", false), "Relative filename is not absolute")
+    assert_true(not Platform.is_absolute("sub/video.mp4", false), "Relative subpath is not absolute")
+
+    assert_true(Platform.is_absolute("C:\\video.mp4", true), "Windows absolute drive path detected")
+    assert_true(Platform.is_absolute("\\\\server\\share\\video.mp4", true), "Windows UNC path detected")
+    assert_true(not Platform.is_absolute("video.mp4", true), "Windows relative path is not absolute")
+
+    -- Platform.resolve_scn
+    -- 1. Bare relative filename with work_dir
+    local r1 = Platform.resolve_scn("test.scn", "/work/dir", nil, false)
+    assert_eq(r1, "/work/dir/test.scn", "Relative filename joined with work_dir")
+
+    -- 2. Auto-append .scn extension if omitted
+    local r2 = Platform.resolve_scn("test", "/work/dir", nil, false)
+    assert_eq(r2, "/work/dir/test.scn", "Extension auto-appended")
+
+    -- 3. Relative subpath with work_dir
+    local r3 = Platform.resolve_scn("cuts/test.scn", "/work/dir", nil, false)
+    assert_eq(r3, "/work/dir/cuts/test.scn", "Relative subpath joined with work_dir")
+
+    -- 4. Fallback to video directory when work_dir is empty or nil
+    local r4 = Platform.resolve_scn("test.scn", "", "/media/video/", false)
+    assert_eq(r4, "/media/video/test.scn", "Fallback to video directory when work_dir is empty")
+
+    local r5 = Platform.resolve_scn("test.scn", nil, "/media/video", false)
+    assert_eq(r5, "/media/video/test.scn", "Fallback to video directory with missing trailing slash")
+
+    -- 5. Absolute path preserved
+    local r6 = Platform.resolve_scn("/custom/abs.scn", "/work/dir", "/fallback", false)
+    assert_eq(r6, "/custom/abs.scn", "Absolute POSIX path preserved")
+
+    local r7 = Platform.resolve_scn("D:\\custom\\abs.scn", "C:\\work", "C:\\fallback", true)
+    assert_eq(r7, "D:\\custom\\abs.scn", "Absolute Windows path preserved")
+end)
+
+test("SceneRepository:clear resets repository state", function()
+    local repo = SceneRepository.new()
+    repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Scene 1")
+    repo:add(TimeCode.from_seconds(30), TimeCode.from_seconds(40), "Scene 2")
+    assert_eq(repo:count(), 2, "Repo contains 2 scenes")
+
+    repo:clear()
+    assert_eq(repo:count(), 0, "Repo count is 0 after clear")
+    assert_eq(#repo.scenes, 0, "Scenes table is empty after clear")
+    assert_eq(repo.file_path, "", "File path is reset after clear")
+end)
+
+test("app:on_new_file lifecycle and 2-step confirmation guard", function()
+    local app = T.app
+    local repo = SceneRepository.new()
+    repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Scene 1")
+    app.repo = repo
+    app.pending_new_confirm = nil
+
+    local last_status = ""
+    app.set_status = function(self, msg) last_status = msg end
+    app.list = {
+        clear = function() end,
+        add_value = function() end
+    }
+
+    -- Step 1: Click New when scenes exist -> asks for confirmation
+    app:on_new_file()
+    assert_true(app.pending_new_confirm == true, "Confirmation state set on 1st click")
+    assert_true(last_status:find("Click 'New' again", 1, true) ~= nil, "Confirmation warning shown")
+    assert_eq(repo:count(), 1, "Scenes NOT wiped before confirmation")
+
+    -- Step 2: Click New second time -> clears repository and resets confirmation
+    app:on_new_file()
+    assert_eq(app.pending_new_confirm, nil, "Confirmation state cleared")
+    assert_eq(repo:count(), 0, "Repository cleared after confirmation")
+    assert_true(last_status:find("Started new empty scene list", 1, true) ~= nil, "Ready status shown")
+
+    -- Immediate clear when already 0 scenes
+    app:on_new_file()
+    assert_eq(app.pending_new_confirm, nil, "No confirmation required when repo is empty")
+end)
+
+test("app:on_save_as saves current scenes to specified .scn file", function()
+    local app = T.app
+    local repo = SceneRepository.new()
+    repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Branch Scene")
+    app.repo = repo
+
+    local target_file = "/tmp/test_save_as_" .. os.time() .. ".scn"
+    app.path_input = {
+        get_text = function() return target_file end
+    }
+    app.workdir_input = {
+        get_text = function() return "" end
+    }
+
+    local last_status = ""
+    app.set_status = function(self, msg) last_status = msg end
+
+    app:on_save_as()
+    assert_true(last_status:find("Saved 1 scene(s)", 1, true) ~= nil, "Save As reports success")
+    assert_eq(app.loaded_scn_path, target_file, "loaded_scn_path updated")
+
+    -- Verify file exists and content matches
+    local f = io.open(target_file, "r")
+    assert_true(f ~= nil, "Saved .scn file exists on disk")
+    local content = f:read("*a")
+    f:close()
+    os.remove(target_file)
+    assert_true(content:find("Branch Scene", 1, true) ~= nil, "Content persisted correctly")
+end)
+
+test("app:on_load_file distinguishes missing files from errors", function()
+    local app = T.app
+    app.repo = SceneRepository.new()
+
+    app.path_input = {
+        get_text = function() return "/tmp/completely_nonexistent_file_98765.scn" end
+    }
+    app.workdir_input = {
+        get_text = function() return "" end
+    }
+
+    local last_status = ""
+    app.set_status = function(self, msg) last_status = msg end
+
+    app:on_load_file()
+    assert_true(last_status:find("File not found", 1, true) ~= nil, "Missing file reports File not found")
+    assert_true(last_status:find("Click 'New'", 1, true) ~= nil, "Advises user to click New")
+end)
+
+test("app:on_export_script exports selected scenes symmetrically with Cut", function()
+    local app = T.app
+    local repo = SceneRepository.new()
+    repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Scene 1")
+    repo:add(TimeCode.from_seconds(30), TimeCode.from_seconds(40), "Scene 2")
+    repo:add(TimeCode.from_seconds(50), TimeCode.from_seconds(60), "Scene 3")
+    app.repo = repo
+
+    -- Mock video path
+    local old_get_video = T.VlcPlayerAdapter.get_video_path
+    local test_video = "/tmp/test_video_export.mp4"
+    T.VlcPlayerAdapter.get_video_path = function() return test_video end
+
+    -- Select only Scene 2
+    app.list = {
+        get_selection = function() return { [2] = "Scene 2" } end
+    }
+    app.workdir_input = {
+        get_text = function() return "/tmp" end
+    }
+    app.loaded_video_path = test_video
+
+    local last_status = ""
+    app.set_status = function(self, msg) last_status = msg end
+
+    app:on_export_script()
+    assert_true(last_status:find("Exported cut script for 1 selected scene", 1, true) ~= nil, "Export script reports selected count")
+
+    -- Check generated script content
+    local ext = Platform.script_ext()
+    local script_file = "/tmp/test_video_export_cut_scenes" .. ext
+    local f = io.open(script_file, "r")
+    assert_true(f ~= nil, "Generated script exists")
+    local script_text = f:read("*a")
+    f:close()
+    os.remove(script_file)
+
+    assert_true(script_text:find("Scene 2", 1, true) ~= nil, "Script contains selected Scene 2")
+    assert_true(script_text:find("Scene 1", 1, true) == nil, "Script does NOT contain unselected Scene 1")
+    assert_true(script_text:find("Scene 3", 1, true) == nil, "Script does NOT contain unselected Scene 3")
+
+    -- Restore mock
+    T.VlcPlayerAdapter.get_video_path = old_get_video
+end)
+
 print("--------------------------------------------------")
 print(string.format("Test Results: %d/%d passed (%s)", passed_tests, total_tests, passed_tests == total_tests and "ALL PASSED" or "SOME FAILED"))
 print("--------------------------------------------------")
