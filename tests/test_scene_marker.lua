@@ -142,6 +142,27 @@ test("TimeCode.from_string (no milliseconds)", function()
     assert_eq(tc.total_sec, 45, "Total seconds correct")
 end)
 
+test("TimeCode.from_string length cap and range bounds", function()
+    -- Valid 12-char
+    local tc, err = TimeCode.from_string("00:01:23,456")
+    assert_true(tc ~= nil, "Valid 12-char timecode accepted")
+
+    -- Exceeding 12 chars rejected
+    local tc_long, err_long = TimeCode.from_string("00:01:23,4567")
+    assert_true(tc_long == nil, "Over 12 chars rejected")
+    assert_true(err_long:find("exceeds maximum length of 12 characters", 1, true) ~= nil, "Length error reported")
+
+    -- Minutes >= 60 rejected
+    local tc_min, err_min = TimeCode.from_string("00:60:00")
+    assert_true(tc_min == nil, "Minutes >= 60 rejected")
+    assert_true(err_min:find("Minutes must be between 0 and 59", 1, true) ~= nil, "Minutes error reported")
+
+    -- Seconds >= 60 rejected
+    local tc_sec, err_sec = TimeCode.from_string("00:00:60")
+    assert_true(tc_sec == nil, "Seconds >= 60 rejected")
+    assert_true(err_sec:find("Seconds must be between 0 and 59", 1, true) ~= nil, "Seconds error reported")
+end)
+
 test("TimeCode comparison operators (<, <=, ==)", function()
     local t1 = TimeCode.from_seconds(10.0)
     local t2 = TimeCode.from_seconds(20.0)
@@ -714,6 +735,33 @@ test("Platform.is_absolute and Platform.resolve_scn path resolution", function()
     assert_eq(r7, "D:\\custom\\abs.scn", "Absolute Windows path preserved")
 end)
 
+test("Platform.relative_display strips work_dir for cleaner display", function()
+    -- Inside work_dir with trailing slash
+    local d1 = Platform.relative_display("/home/user/Videos/movie.scn", "/home/user/Videos/")
+    assert_eq(d1, "movie.scn", "Strips work_dir with trailing slash")
+
+    -- Inside work_dir without trailing slash
+    local d2 = Platform.relative_display("/home/user/Videos/movie.scn", "/home/user/Videos")
+    assert_eq(d2, "movie.scn", "Strips work_dir without trailing slash")
+
+    -- Windows backslash path
+    local d3 = Platform.relative_display("C:\\Videos\\movie.scn", "C:\\Videos\\")
+    assert_eq(d3, "movie.scn", "Strips Windows work_dir with backslash")
+
+    local d4 = Platform.relative_display("C:\\Videos\\movie.scn", "C:\\Videos")
+    assert_eq(d4, "movie.scn", "Strips Windows work_dir without trailing backslash")
+
+    -- Outside work_dir returns full path
+    local d5 = Platform.relative_display("/other/dir/movie.scn", "/home/user/Videos")
+    assert_eq(d5, "/other/dir/movie.scn", "Preserves path outside work_dir")
+
+    -- Empty work_dir returns original path
+    local d6 = Platform.relative_display("/home/user/Videos/movie.scn", "")
+    assert_eq(d6, "/home/user/Videos/movie.scn", "Returns original path when work_dir is empty")
+    local d7 = Platform.relative_display("/home/user/Videos/movie.scn", nil)
+    assert_eq(d7, "/home/user/Videos/movie.scn", "Returns original path when work_dir is nil")
+end)
+
 test("SceneRepository:clear resets repository state", function()
     local repo = SceneRepository.new()
     repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Scene 1")
@@ -849,6 +897,114 @@ test("app:on_export_script exports selected scenes symmetrically with Cut", func
 
     -- Restore mock
     T.VlcPlayerAdapter.get_video_path = old_get_video
+end)
+
+test("activate() initializes 12-column grid layout correctly", function()
+    local widgets = {}
+    local orig_dialog = _G.vlc.dialog
+    _G.vlc.dialog = function(title)
+        local d = {
+            title = title,
+            add_button = function(self, text, fn, col, row, col_span, row_span)
+                table.insert(widgets, { type = "button", text = text, col = col, row = row, col_span = col_span or 1, row_span = row_span or 1 })
+                return {}
+            end,
+            add_label = function(self, text, col, row, col_span, row_span)
+                table.insert(widgets, { type = "label", text = text, col = col, row = row, col_span = col_span or 1, row_span = row_span or 1 })
+                return { set_text = function() end }
+            end,
+            add_text_input = function(self, text, col, row, col_span, row_span)
+                table.insert(widgets, { type = "text_input", text = text, col = col, row = row, col_span = col_span or 1, row_span = row_span or 1 })
+                return { get_text = function() return text end, set_text = function() end }
+            end,
+            add_list = function(self, col, row, col_span, row_span)
+                table.insert(widgets, { type = "list", col = col, row = row, col_span = col_span or 1, row_span = row_span or 1 })
+                return { clear = function() end, add_value = function() end, get_selection = function() return {} end }
+            end,
+            add_html = function(self, text, col, row, col_span, row_span)
+                table.insert(widgets, { type = "html", text = text, col = col, row = row, col_span = col_span or 1, row_span = row_span or 1 })
+                return { get_text = function() return text end, set_text = function() end }
+            end,
+            delete = function() end
+        }
+        return d
+    end
+
+    -- Reset app.dlg to force activate to run
+    T.app.dlg = nil
+    T.activate()
+
+    assert_true(T.app.dlg ~= nil, "Dialog was created")
+    assert_eq(#widgets, 24, "All 24 widgets registered in grid")
+
+    -- Verify all rows respect 12 columns
+    for _, w in ipairs(widgets) do
+        assert_true(w.col + w.col_span - 1 <= 12, string.format("Widget %s at row %d fits in 12 columns", w.type, w.row))
+    end
+
+    -- Verify Row 1: 3 equal buttons spanning 4 columns each
+    local r1_buttons = {}
+    for _, w in ipairs(widgets) do
+        if w.row == 1 and w.type == "button" then table.insert(r1_buttons, w) end
+    end
+    assert_eq(#r1_buttons, 3, "Row 1 has 3 file buttons")
+    for _, b in ipairs(r1_buttons) do
+        assert_eq(b.col_span, 4, string.format("Row 1 button '%s' spans 4 columns", b.text))
+    end
+
+    -- Verify Row 12: 4 equal buttons spanning 3 columns each
+    local r12_buttons = {}
+    for _, w in ipairs(widgets) do
+        if w.row == 12 and w.type == "button" then table.insert(r12_buttons, w) end
+    end
+    assert_eq(#r12_buttons, 4, "Row 12 has 4 scene buttons")
+    for _, b in ipairs(r12_buttons) do
+        assert_eq(b.col_span, 3, string.format("Row 12 button '%s' spans 3 columns", b.text))
+    end
+
+    -- Verify Row 13: 2 equal buttons spanning 6 columns each
+    local r13_buttons = {}
+    for _, w in ipairs(widgets) do
+        if w.row == 13 and w.type == "button" then table.insert(r13_buttons, w) end
+    end
+    assert_eq(#r13_buttons, 2, "Row 13 has 2 FFmpeg buttons")
+    for _, b in ipairs(r13_buttons) do
+        assert_eq(b.col_span, 6, string.format("Row 13 button '%s' spans 6 columns", b.text))
+    end
+
+    -- Verify all labels align flush left at col 1 and span 2 columns
+    for _, w in ipairs(widgets) do
+        if w.type == "label" then
+            assert_eq(w.col, 1, string.format("Label '%s' at row %d starts at col 1", w.text, w.row))
+            assert_eq(w.col_span, 2, string.format("Label '%s' at row %d spans 2 columns", w.text, w.row))
+        end
+    end
+
+    -- Verify timecode inputs start at col 3 and span 3 columns
+    local start_w, end_w
+    for _, w in ipairs(widgets) do
+        if w.row == 14 and w.type == "text_input" then start_w = w end
+        if w.row == 15 and w.type == "text_input" then end_w = w end
+    end
+    assert_true(start_w ~= nil, "start_input widget found")
+    assert_eq(start_w.col, 3, "start_input starts at col 3")
+    assert_eq(start_w.col_span, 3, "start_input spans 3 columns")
+
+    assert_true(end_w ~= nil, "end_input widget found")
+    assert_eq(end_w.col, 3, "end_input starts at col 3")
+    assert_eq(end_w.col_span, 3, "end_input spans 3 columns")
+
+    -- Verify .scn path input displays relative filename
+    local path_w
+    for _, w in ipairs(widgets) do
+        if w.row == 3 and w.type == "text_input" then path_w = w end
+    end
+    assert_true(path_w ~= nil, "path_input widget found")
+    assert_eq(path_w.text, "sample_movie.scn", "path_input displays relative filename when inside work_dir")
+
+    -- Clean up
+    T.app.dlg = nil
+    _G.vlc.dialog = orig_dialog
 end)
 
 print("--------------------------------------------------")

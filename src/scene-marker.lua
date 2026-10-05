@@ -35,12 +35,29 @@ end
 -- @param str string Timestamp string
 function TimeCode.from_string(str)
     if type(str) ~= "string" then return nil, "Invalid string" end
-    local h, m, s, sep, ms = str:match("^%s*(%d+):(%d+):(%d+)([,.]?)(%d*)%s*$")
+    local trimmed = str:match("^%s*(.-)%s*$") or ""
+    if #trimmed > 12 then
+        return nil, string.format("Timecode exceeds maximum length of 12 characters (got %d chars)", #trimmed)
+    end
+
+    local h, m, s, sep, ms = trimmed:match("^(%d+):(%d+):(%d+)([,.]?)(%d*)$")
     if not (h and m and s) then
         return nil, "Invalid format (expected HH:MM:SS or HH:MM:SS,mmm)"
     end
 
-    local sec = tonumber(h) * 3600 + tonumber(m) * 60 + tonumber(s)
+    local n_m = tonumber(m)
+    local n_s = tonumber(s)
+    if n_m >= 60 then
+        return nil, "Minutes must be between 0 and 59"
+    end
+    if n_s >= 60 then
+        return nil, "Seconds must be between 0 and 59"
+    end
+    if ms and #ms > 3 then
+        return nil, "Milliseconds cannot exceed 3 digits"
+    end
+
+    local sec = tonumber(h) * 3600 + n_m * 60 + n_s
     if ms and #ms > 0 then
         local divisor = 10 ^ (#ms)
         sec = sec + (tonumber(ms) / divisor)
@@ -267,6 +284,22 @@ function Platform.resolve_scn(p, work_dir, fallback_dir, is_win)
     end
 
     return base .. p
+end
+
+--- Return relative filename if path is inside work_dir, otherwise return original path
+-- @param path string Full or relative path to file
+-- @param work_dir string|nil Working directory
+-- @return string Relative filename if inside work_dir, or original path
+function Platform.relative_display(path, work_dir)
+    if not path or path == "" then return "" end
+    if not work_dir or work_dir == "" then return path end
+
+    local norm_wd = work_dir:gsub("\\", "/"):gsub("/+$", "") .. "/"
+    local norm_p = path:gsub("\\", "/")
+    if norm_p:sub(1, #norm_wd) == norm_wd then
+        return norm_p:sub(#norm_wd + 1)
+    end
+    return path
 end
 
 --------------------------------------------------
@@ -1071,7 +1104,10 @@ function app:on_new_file()
         local guessed = VlcPlayerAdapter.guess_scn_path()
         if guessed ~= "" then
             local stem = guessed:match("^(.*)%.scn$") or guessed
-            if self.path_input then self.path_input:set_text(stem .. "_new.scn") end
+            local new_target = stem .. "_new.scn"
+            local wd = self:get_work_dir() or VlcPlayerAdapter.guess_work_dir()
+            local display_new = Platform.relative_display(new_target, wd)
+            if self.path_input then self.path_input:set_text(display_new) end
         end
     end
 
@@ -1531,52 +1567,53 @@ function activate()
     end
     app.dlg = vlc.dialog("Scene Marker")
 
-    -- Row 1: File Actions (New, Load, Save As)
-    app.dlg:add_button("📄 New",     function() app:on_new_file() end,  1, 1, 1, 1)
-    app.dlg:add_button("📂 Load",    function() app:on_load_file() end, 2, 1, 2, 1)
-    app.dlg:add_button("💾 Save As", function() app:on_save_as() end,   4, 1, 2, 1)
+    -- Row 1: File Actions (New, Load, Save As - 3 equal buttons, span 4 each)
+    app.dlg:add_button("📄 New",     function() app:on_new_file() end,  1, 1, 4, 1)
+    app.dlg:add_button("📂 Load",    function() app:on_load_file() end, 5, 1, 4, 1)
+    app.dlg:add_button("💾 Save As", function() app:on_save_as() end,   9, 1, 4, 1)
 
     -- Row 2: Working Directory input (defaults to playing video directory)
-    app.dlg:add_label("<b>Work Dir:</b>", 1, 2, 1, 1)
+    app.dlg:add_label("<b>Work Dir:</b>", 1, 2, 2, 1)
     local initial_work_dir = VlcPlayerAdapter.guess_work_dir()
-    app.workdir_input = app.dlg:add_text_input(initial_work_dir, 2, 2, 4, 1)
+    app.workdir_input = app.dlg:add_text_input(initial_work_dir, 3, 2, 10, 1)
 
-    -- Row 3: .scn file input
-    app.dlg:add_label("<b>.scn File:</b>", 1, 3, 1, 1)
+    -- Row 3: .scn file input (relative filename if inside work directory)
+    app.dlg:add_label("<b>.scn File:</b>", 1, 3, 2, 1)
     local initial_path = VlcPlayerAdapter.guess_scn_path()
-    app.path_input = app.dlg:add_text_input(initial_path, 2, 3, 4, 1)
+    local initial_display = Platform.relative_display(initial_path, initial_work_dir)
+    app.path_input = app.dlg:add_text_input(initial_display, 3, 3, 10, 1)
 
-    -- Rows 4-11: Scenes list view (height 8)
-    app.list = app.dlg:add_list(1, 4, 5, 8)
+    -- Rows 4-11: Scenes list view (height 8, full width)
+    app.list = app.dlg:add_list(1, 4, 12, 8)
     app.list:add_value(Scene.TABLE_HEADER, 0)
 
-    -- Row 12: Scene Operations (Navigation, Edit, Delete)
-    app.dlg:add_button("▶ To Start", function() app:on_jump_to_start() end,   1, 12, 1, 1)
-    app.dlg:add_button("⏹ To End",   function() app:on_jump_to_end() end,     2, 12, 1, 1)
-    app.dlg:add_button("✏️ Edit",     function() app:on_edit_selected() end,   3, 12, 1, 1)
-    app.dlg:add_button("🗑️ Delete",   function() app:on_delete_selected() end, 4, 12, 2, 1)
+    -- Row 12: Scene Operations (Navigation, Edit, Delete - 4 equal buttons, span 3 each)
+    app.dlg:add_button("⏮️ To Start", function() app:on_jump_to_start() end,    1, 12, 3, 1)
+    app.dlg:add_button("⏭️ To End",   function() app:on_jump_to_end() end,      4, 12, 3, 1)
+    app.dlg:add_button("✏️ Edit",     function() app:on_edit_selected() end,    7, 12, 3, 1)
+    app.dlg:add_button("🗑️ Delete",   function() app:on_delete_selected() end, 10, 12, 3, 1)
 
-    -- Row 13: Production / Output (FFmpeg Actions: Cut & Export Script)
-    app.dlg:add_button("✂️ Cut",             function() app:on_cut_selected() end,    1, 13, 2, 1)
-    app.dlg:add_button("🎬 Export Cut Script", function() app:on_export_script() end, 3, 13, 3, 1)
+    -- Row 13: Production / Output (FFmpeg Actions: Cut & Export Script - 2 equal buttons, span 6 each)
+    app.dlg:add_button("✂️ Cut",             function() app:on_cut_selected() end, 1, 13, 6, 1)
+    app.dlg:add_button("🎬 Export Cut Script", function() app:on_export_script() end, 7, 13, 6, 1)
 
-    -- Row 14: Fragment Start input & Mark Start button
-    app.dlg:add_label("<b>Start:</b>", 1, 14, 1, 1)
-    app.start_input = app.dlg:add_text_input("", 2, 14, 2, 1)
-    app.dlg:add_button("⏱️ Mark Start", function() app:on_mark_start() end, 4, 14, 2, 1)
+    -- Row 14: Fragment Start input & Mark button
+    app.dlg:add_label("<b>Start:</b>", 1, 14, 2, 1)
+    app.start_input = app.dlg:add_text_input("", 3, 14, 3, 1)
+    app.dlg:add_button("⏱️ Mark", function() app:on_mark_start() end, 6, 14, 2, 1)
 
-    -- Row 15: Fragment End input & Mark End button
-    app.dlg:add_label("<b>End:</b>", 1, 15, 1, 1)
-    app.end_input = app.dlg:add_text_input("", 2, 15, 2, 1)
-    app.dlg:add_button("⏱️ Mark End", function() app:on_mark_end() end, 4, 15, 2, 1)
+    -- Row 15: Fragment End input & Mark button
+    app.dlg:add_label("<b>End:</b>", 1, 15, 2, 1)
+    app.end_input = app.dlg:add_text_input("", 3, 15, 3, 1)
+    app.dlg:add_button("⏱️ Mark", function() app:on_mark_end() end, 6, 15, 2, 1)
 
     -- Row 16: Scene Title input & Add/Save Scene button
-    app.dlg:add_label("<b>Title:</b>", 1, 16, 1, 1)
-    app.title_input = app.dlg:add_text_input("", 2, 16, 2, 1)
-    app.dlg:add_button("➕ Add / Save Scene", function() app:on_save_scene() end, 4, 16, 2, 1)
+    app.dlg:add_label("<b>Title:</b>", 1, 16, 2, 1)
+    app.title_input = app.dlg:add_text_input("", 3, 16, 6, 1)
+    app.dlg:add_button("➕ Add / Save Scene", function() app:on_save_scene() end, 9, 16, 4, 1)
 
     -- Row 17: Fixed-height Scrollable & Copyable Status Area (QTextBrowser, height ~75-80px / ~4 lines, scrollbar as needed)
-    app.status_box = app.dlg:add_html("<div style='font-family:sans-serif; font-size:11px; margin:0; padding:0; color:#666;'>Ready. Load an .scn file or mark fragment timestamps.</div>", 1, 17, 5, 1)
+    app.status_box = app.dlg:add_html("<div style='font-family:sans-serif; font-size:11px; margin:0; padding:0; color:#666;'>Ready. Load an .scn file or mark fragment timestamps.</div>", 1, 17, 12, 1)
 
     -- Track active context
     app.loaded_video_path = VlcPlayerAdapter.get_video_path()
@@ -1597,8 +1634,8 @@ function menu()
         "⏱️ Mark Start",
         "⏱️ Mark End",
         "➕ Add / Save Scene",
-        "▶ Jump to Start",
-        "⏹ Jump to End",
+        "⏮️ Jump to Start",
+        "⏭️ Jump to End",
         "✏️ Edit Selected Scene",
         "✂️ Cut Selected Scene",
         "🗑️ Delete Selected Scene",
@@ -1679,6 +1716,7 @@ if _G and _G.__TEST__ then
         VlcPlayerAdapter = VlcPlayerAdapter,
         app              = app,
         wrap_status_text = wrap_status_text,
-        html_escape      = html_escape
+        html_escape      = html_escape,
+        activate         = activate
     }
 end
