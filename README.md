@@ -31,12 +31,22 @@ Detailed documentation, component responsibilities, and class diagrams can be fo
 
 ```
 scene-maker/
+├── dist/
+│   └── scene-marker.lua            # Compiled self-contained bundle for VLC
 ├── src/
-│   └── scene-marker.lua            # Standalone extension script for VLC
+│   ├── timecode.lua                # Value Object: TimeCode
+│   ├── scene.lua                   # Entity: Scene
+│   ├── platform.lua                # Host OS shell quoting, ensure_dir, list_scn_files
+│   ├── cutter_service.lua          # FFmpeg discovery, command generator, and cut execution
+│   ├── scene_repository.lua        # SCN parser, collection manager, and serializer
+│   ├── vlc_player_adapter.lua      # VLC C-API bridge
+│   ├── app_controller.lua          # State machine, action handlers, status formatting
+│   └── main.lua                    # Descriptor, VLC lifecycle hooks, 12-col dialog
 ├── tests/
-│   └── test_scene_marker.lua       # Standalone headless test suite
+│   └── test_scene_marker.lua       # Standalone headless test suite (45 tests)
 ├── scripts/
-│   ├── install.sh                  # Installer script for Snap & Native VLC
+│   ├── build.sh / build.lua        # Micro-bundler compiling src/ into dist/scene-marker.lua
+│   ├── install.sh                  # Builds and installs bundle to Snap & Native VLC
 │   ├── get-ffmpeg.sh               # Downloads static FFmpeg for Snap VLC
 │   └── install-ffmpeg-windows.bat  # Automated Windows FFmpeg installer
 ├── md/
@@ -46,21 +56,27 @@ scene-maker/
 
 ---
 
-## Installation
+## Installation & Build
 
-### 1. Extension Installation
+### 1. Build Bundle
+The source code is organized into modular Lua components under `src/`. To compile them into `dist/scene-marker.lua`:
+```bash
+./scripts/build.sh
+```
+
+### 2. Extension Installation
 
 #### Linux
-Run the installation script:
+Run the installation script (which automatically builds and installs `dist/scene-marker.lua`):
 ```bash
 ./scripts/install.sh
 ```
-Or manually copy `src/scene-marker.lua` to:
+Or manually copy `dist/scene-marker.lua` to:
 - **Snap VLC**: `~/snap/vlc/current/.local/share/vlc/lua/extensions/`
 - **Native VLC**: `~/.local/share/vlc/lua/extensions/`
 
 #### Windows
-Copy `src/scene-marker.lua` to:
+Copy `dist/scene-marker.lua` to:
 ```
 %APPDATA%\vlc\lua\extensions\scene-marker.lua
 ```

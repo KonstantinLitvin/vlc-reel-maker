@@ -6,10 +6,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SOURCE_FILE="${REPO_ROOT}/src/scene-marker.lua"
 
-if [ ! -f "${SOURCE_FILE}" ]; then
-    echo "❌ Error: Source file not found at ${SOURCE_FILE}"
+echo "=================================================="
+echo "Building VLC Scene Marker Extension bundle..."
+echo "=================================================="
+"${SCRIPT_DIR}/build.sh"
+
+DIST_FILE="${REPO_ROOT}/dist/scene-marker.lua"
+
+if [ ! -f "${DIST_FILE}" ]; then
+    echo "❌ Error: Distribution bundle not found at ${DIST_FILE}"
     exit 1
 fi
 
@@ -29,7 +35,7 @@ for dest_dir in "${DEST_DIRS[@]}"; do
     parent_dir="$(dirname "${dest_dir}")"
     if [ -d "${parent_dir}" ] || [[ "${dest_dir}" == *"/snap/vlc/"* && -d "${HOME}/snap/vlc" ]]; then
         mkdir -p "${dest_dir}"
-        cp -f "${SOURCE_FILE}" "${dest_dir}/scene-marker.lua"
+        cp -f "${DIST_FILE}" "${dest_dir}/scene-marker.lua"
         echo "✅ Installed to: ${dest_dir}/scene-marker.lua"
         installed_count=$((installed_count + 1))
     fi
@@ -38,7 +44,7 @@ done
 if [ ${installed_count} -eq 0 ]; then
     # Fallback to standard local share
     mkdir -p "${HOME}/.local/share/vlc/lua/extensions"
-    cp -f "${SOURCE_FILE}" "${HOME}/.local/share/vlc/lua/extensions/scene-marker.lua"
+    cp -f "${DIST_FILE}" "${HOME}/.local/share/vlc/lua/extensions/scene-marker.lua"
     echo "✅ Created default directory and installed to: ${HOME}/.local/share/vlc/lua/extensions/scene-marker.lua"
 fi
 

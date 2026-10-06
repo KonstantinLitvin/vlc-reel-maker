@@ -34,6 +34,8 @@ _G.vlc = {
         decode_uri = function(u) return u end
     },
     dialog = function(title)
+        local dd_items = {}
+        local dd_val = 0
         return {
             add_button = function() return {} end,
             add_label  = function() return { set_text = function() end } end,
@@ -48,7 +50,18 @@ _G.vlc = {
                 local val = text or ""
                 return {
                     get_text = function() return val end,
-                    set_text = function(t) val = t end
+                    set_text = function(self, t) val = t end
+                }
+            end,
+            add_dropdown = function(col, row, col_span, row_span)
+                return {
+                    clear = function(self) dd_items = {}; dd_val = 0 end,
+                    add_value = function(self, str, id)
+                        dd_items[id] = str
+                        if dd_val == 0 then dd_val = id end
+                    end,
+                    get_value = function(self) return dd_val end,
+                    set_value = function(self, id) dd_val = id end
                 }
             end,
             add_list = function()
@@ -65,12 +78,16 @@ _G.vlc = {
     deactivate = function() end
 }
 
--- Load target script
-local script_path = "src/scene-marker.lua"
+-- Load target distribution bundle (build if missing)
+local script_path = "dist/scene-marker.lua"
 local chunk, load_err = loadfile(script_path)
 if not chunk then
     -- Fallback if run from tests directory
-    chunk, load_err = loadfile("../src/scene-marker.lua")
+    chunk, load_err = loadfile("../dist/scene-marker.lua")
+end
+if not chunk then
+    os.execute("luajit scripts/build.lua 2>/dev/null || luajit ../scripts/build.lua 2>/dev/null")
+    chunk, load_err = loadfile(script_path) or loadfile("../dist/scene-marker.lua")
 end
 assert(chunk, "Failed to load script: " .. tostring(load_err))
 chunk()
@@ -899,6 +916,131 @@ test("app:on_export_script exports selected scenes symmetrically with Cut", func
     T.VlcPlayerAdapter.get_video_path = old_get_video
 end)
 
+-- 41. Platform directory management & discovery tests
+test("Platform.dir_exists and Platform.ensure_dir", function()
+    local test_dir = "/tmp/test_scene_marker_dir_" .. os.time()
+    os.execute("rm -rf " .. Platform.quote(test_dir, false))
+
+    assert_true(not Platform.dir_exists(test_dir, false), "New dir does not exist yet")
+
+    -- Ensure dir creates directory
+    local ok, was_created = Platform.ensure_dir(test_dir, false)
+    assert_true(ok, "ensure_dir succeeded")
+    assert_true(was_created, "Directory was newly created")
+    assert_true(Platform.dir_exists(test_dir, false), "Directory now exists")
+
+    -- Ensure dir on existing directory is idempotent
+    local ok2, was_created2 = Platform.ensure_dir(test_dir, false)
+    assert_true(ok2, "ensure_dir on existing dir succeeded")
+    assert_true(not was_created2, "Directory was NOT recreated (idempotent)")
+
+    -- Clean up
+    os.execute("rm -rf " .. Platform.quote(test_dir, false))
+end)
+
+test("Platform.list_scn_files finds and sorts .scn files only", function()
+    local test_dir = "/tmp/test_scn_scan_" .. os.time()
+    os.execute("mkdir -p " .. Platform.quote(test_dir, false))
+
+    -- Create test files
+    local f1 = io.open(test_dir .. "/beta_movie.scn", "w"); f1:write("test"); f1:close()
+    local f2 = io.open(test_dir .. "/alpha_movie.scn", "w"); f2:write("test"); f2:close()
+    local f3 = io.open(test_dir .. "/gamma_movie.SCN", "w"); f3:write("test"); f3:close()
+    local f4 = io.open(test_dir .. "/ignored.txt", "w"); f4:write("test"); f4:close()
+    local f5 = io.open(test_dir .. "/ignored.mp4", "w"); f5:write("test"); f5:close()
+
+    local scn_files = Platform.list_scn_files(test_dir, false)
+    assert_eq(#scn_files, 3, "Found exactly 3 .scn files (including .SCN)")
+    assert_eq(scn_files[1], "alpha_movie.scn", "First file sorted alphabetically")
+    assert_eq(scn_files[2], "beta_movie.scn", "Second file sorted alphabetically")
+    assert_eq(scn_files[3], "gamma_movie.SCN", "Third file sorted alphabetically")
+
+    -- Clean up
+    os.execute("rm -rf " .. Platform.quote(test_dir, false))
+end)
+
+test("app:scan_and_populate_dropdown and app:on_select_from_dropdown", function()
+    local test_dir = "/tmp/test_dropdown_" .. os.time()
+    os.execute("mkdir -p " .. Platform.quote(test_dir, false))
+
+    local f1 = io.open(test_dir .. "/sample_1.scn", "w"); f1:write("test"); f1:close()
+    local f2 = io.open(test_dir .. "/sample_2.scn", "w"); f2:write("test"); f2:close()
+
+    local dd_items = {}
+    local dd_val = 0
+    T.app.scn_dropdown = {
+        clear = function() dd_items = {}; dd_val = 0 end,
+        add_value = function(self, text, id)
+            dd_items[id] = text
+            if dd_val == 0 then dd_val = id end
+        end,
+        get_value = function() return dd_val end
+    }
+
+    local path_val = ""
+    T.app.path_input = {
+        get_text = function() return path_val end,
+        set_text = function(self, t) path_val = t end
+    }
+
+    local count = T.app:scan_and_populate_dropdown(test_dir)
+    assert_eq(count, 2, "Found 2 files")
+    assert_eq(T.app.dropdown_files[1], "sample_1.scn", "Dropdown file 1 tracked")
+    assert_eq(T.app.dropdown_files[2], "sample_2.scn", "Dropdown file 2 tracked")
+
+    -- Select first item (dd_val = 1)
+    T.app:on_select_from_dropdown()
+    assert_eq(path_val, "sample_1.scn", "path_input updated with selected dropdown file")
+
+    -- Select second item
+    dd_val = 2
+    T.app:on_select_from_dropdown()
+    assert_eq(path_val, "sample_2.scn", "path_input updated with second dropdown file")
+
+    -- Clean up
+    os.execute("rm -rf " .. Platform.quote(test_dir, false))
+    T.app.scn_dropdown = nil
+    T.app.dropdown_files = {}
+end)
+
+test("app:on_set_work_dir creates directory and refreshes dropdown", function()
+    local test_dir = "/tmp/test_set_workdir_" .. os.time()
+    os.execute("rm -rf " .. Platform.quote(test_dir, false))
+
+    T.app.workdir_input = {
+        get_text = function() return test_dir end
+    }
+
+    local dd_items = {}
+    local dd_val = 0
+    T.app.scn_dropdown = {
+        clear = function() dd_items = {}; dd_val = 0 end,
+        add_value = function(self, text, id)
+            dd_items[id] = text
+            if dd_val == 0 then dd_val = id end
+        end,
+        get_value = function() return dd_val end
+    }
+
+    local last_status = ""
+    local old_set_status = T.app.set_status
+    T.app.set_status = function(self, msg, lvl) last_status = msg end
+
+    T.app:on_set_work_dir()
+    assert_true(Platform.dir_exists(test_dir, false), "Work dir was created on disk")
+    assert_true(last_status:find("Created new directory", 1, true) ~= nil, "Status reports directory creation")
+
+    -- Re-running on existing dir reports set work dir
+    T.app:on_set_work_dir()
+    assert_true(last_status:find("Set Work Dir", 1, true) ~= nil, "Status reports work dir set")
+
+    -- Clean up
+    os.execute("rm -rf " .. Platform.quote(test_dir, false))
+    T.app.set_status = old_set_status
+    T.app.scn_dropdown = nil
+    T.app.workdir_input = nil
+end)
+
 test("activate() initializes 12-column grid layout correctly", function()
     local widgets = {}
     local orig_dialog = _G.vlc.dialog
@@ -916,6 +1058,10 @@ test("activate() initializes 12-column grid layout correctly", function()
             add_text_input = function(self, text, col, row, col_span, row_span)
                 table.insert(widgets, { type = "text_input", text = text, col = col, row = row, col_span = col_span or 1, row_span = row_span or 1 })
                 return { get_text = function() return text end, set_text = function() end }
+            end,
+            add_dropdown = function(self, col, row, col_span, row_span)
+                table.insert(widgets, { type = "dropdown", col = col, row = row, col_span = col_span or 1, row_span = row_span or 1 })
+                return { clear = function() end, add_value = function() end, get_value = function() return 0 end }
             end,
             add_list = function(self, col, row, col_span, row_span)
                 table.insert(widgets, { type = "list", col = col, row = row, col_span = col_span or 1, row_span = row_span or 1 })
@@ -935,7 +1081,7 @@ test("activate() initializes 12-column grid layout correctly", function()
     T.activate()
 
     assert_true(T.app.dlg ~= nil, "Dialog was created")
-    assert_eq(#widgets, 24, "All 24 widgets registered in grid")
+    assert_eq(#widgets, 28, "All 28 widgets registered in grid")
 
     -- Verify all rows respect 12 columns
     for _, w in ipairs(widgets) do
@@ -952,24 +1098,55 @@ test("activate() initializes 12-column grid layout correctly", function()
         assert_eq(b.col_span, 4, string.format("Row 1 button '%s' spans 4 columns", b.text))
     end
 
-    -- Verify Row 12: 4 equal buttons spanning 3 columns each
-    local r12_buttons = {}
+    -- Verify Row 2: Work Dir input (span 7) & Set Dir button (span 3)
+    local r2_btn, r2_inp
     for _, w in ipairs(widgets) do
-        if w.row == 12 and w.type == "button" then table.insert(r12_buttons, w) end
+        if w.row == 2 and w.type == "button" then r2_btn = w end
+        if w.row == 2 and w.type == "text_input" then r2_inp = w end
     end
-    assert_eq(#r12_buttons, 4, "Row 12 has 4 scene buttons")
-    for _, b in ipairs(r12_buttons) do
-        assert_eq(b.col_span, 3, string.format("Row 12 button '%s' spans 3 columns", b.text))
-    end
+    assert_true(r2_btn ~= nil, "Row 2 Set Dir button found")
+    assert_eq(r2_btn.col_span, 3, "Row 2 Set Dir button spans 3 columns")
+    assert_true(r2_inp ~= nil, "Row 2 workdir_input found")
+    assert_eq(r2_inp.col_span, 7, "Row 2 workdir_input spans 7 columns")
 
-    -- Verify Row 13: 2 equal buttons spanning 6 columns each
+    -- Verify Row 3: .scn Files dropdown (span 7) & Select button (span 3)
+    local r3_btn, r3_dd
+    for _, w in ipairs(widgets) do
+        if w.row == 3 and w.type == "button" then r3_btn = w end
+        if w.row == 3 and w.type == "dropdown" then r3_dd = w end
+    end
+    assert_true(r3_btn ~= nil, "Row 3 Select button found")
+    assert_eq(r3_btn.col_span, 3, "Row 3 Select button spans 3 columns")
+    assert_true(r3_dd ~= nil, "Row 3 dropdown found")
+    assert_eq(r3_dd.col_span, 7, "Row 3 dropdown spans 7 columns")
+
+    -- Verify Row 4: .scn path input displays relative filename and spans 10 columns
+    local path_w
+    for _, w in ipairs(widgets) do
+        if w.row == 4 and w.type == "text_input" then path_w = w end
+    end
+    assert_true(path_w ~= nil, "path_input widget found at Row 4")
+    assert_eq(path_w.col_span, 10, "path_input spans 10 columns")
+    assert_eq(path_w.text, "sample_movie.scn", "path_input displays relative filename when inside work_dir")
+
+    -- Verify Row 13: 4 equal buttons spanning 3 columns each
     local r13_buttons = {}
     for _, w in ipairs(widgets) do
         if w.row == 13 and w.type == "button" then table.insert(r13_buttons, w) end
     end
-    assert_eq(#r13_buttons, 2, "Row 13 has 2 FFmpeg buttons")
+    assert_eq(#r13_buttons, 4, "Row 13 has 4 scene buttons")
     for _, b in ipairs(r13_buttons) do
-        assert_eq(b.col_span, 6, string.format("Row 13 button '%s' spans 6 columns", b.text))
+        assert_eq(b.col_span, 3, string.format("Row 13 button '%s' spans 3 columns", b.text))
+    end
+
+    -- Verify Row 14: 2 equal buttons spanning 6 columns each
+    local r14_buttons = {}
+    for _, w in ipairs(widgets) do
+        if w.row == 14 and w.type == "button" then table.insert(r14_buttons, w) end
+    end
+    assert_eq(#r14_buttons, 2, "Row 14 has 2 FFmpeg buttons")
+    for _, b in ipairs(r14_buttons) do
+        assert_eq(b.col_span, 6, string.format("Row 14 button '%s' spans 6 columns", b.text))
     end
 
     -- Verify all labels align flush left at col 1 and span 2 columns
@@ -980,31 +1157,31 @@ test("activate() initializes 12-column grid layout correctly", function()
         end
     end
 
-    -- Verify timecode inputs start at col 3 and span 3 columns
-    local start_w, end_w
-    for _, w in ipairs(widgets) do
-        if w.row == 14 and w.type == "text_input" then start_w = w end
-        if w.row == 15 and w.type == "text_input" then end_w = w end
-    end
-    assert_true(start_w ~= nil, "start_input widget found")
-    assert_eq(start_w.col, 3, "start_input starts at col 3")
-    assert_eq(start_w.col_span, 3, "start_input spans 3 columns")
-
-    assert_true(end_w ~= nil, "end_input widget found")
-    assert_eq(end_w.col, 3, "end_input starts at col 3")
-    assert_eq(end_w.col_span, 3, "end_input spans 3 columns")
-
-    -- Verify .scn path input displays relative filename
-    local path_w
-    for _, w in ipairs(widgets) do
-        if w.row == 3 and w.type == "text_input" then path_w = w end
-    end
-    assert_true(path_w ~= nil, "path_input widget found")
-    assert_eq(path_w.text, "sample_movie.scn", "path_input displays relative filename when inside work_dir")
-
     -- Clean up
     T.app.dlg = nil
     _G.vlc.dialog = orig_dialog
+end)
+
+test("Modular architecture: direct require of src/ modules", function()
+    local orig_path = package.path
+    package.path = "src/?.lua;src/?/init.lua;" .. package.path
+
+    local ModTimeCode = require("timecode")
+    local tc = ModTimeCode.from_seconds(125.5)
+    assert_eq(tc:to_string(true, ","), "00:02:05,500", "Directly required TimeCode functions")
+
+    local ModPlatform = require("platform")
+    assert_true(ModPlatform.quote ~= nil, "Directly required Platform functions")
+
+    local ModScene = require("scene")
+    local sc = ModScene.new(1, tc, ModTimeCode.from_seconds(130), "Modular Scene")
+    assert_eq(sc.title, "Modular Scene", "Directly required Scene functions")
+
+    local ModRepo = require("scene_repository")
+    local repo = ModRepo.new()
+    assert_eq(repo:count(), 0, "Directly required SceneRepository functions")
+
+    package.path = orig_path
 end)
 
 print("--------------------------------------------------")
