@@ -64,6 +64,24 @@ function VlcPlayerAdapter.get_video_path()
     return path
 end
 
+--- Get media display name (title or filename) from playing item
+function VlcPlayerAdapter.get_media_name()
+    if not vlc or not vlc.input or not vlc.input.item then return "" end
+    local item = vlc.input.item()
+    if not item then return "" end
+
+    if item.name then
+        local name = item:name()
+        if name and name ~= "" then return name end
+    end
+
+    local path = VlcPlayerAdapter.get_video_path()
+    if path and path ~= "" then
+        return path:match("([^\\/]+)$") or path
+    end
+    return ""
+end
+
 --- Guess work directory from playing item
 function VlcPlayerAdapter.guess_work_dir()
     local path = VlcPlayerAdapter.get_video_path()

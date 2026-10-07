@@ -7,6 +7,7 @@ local Platform = require("platform")
 local CutterService = require("cutter_service")
 local SceneRepository = require("scene_repository")
 local VlcPlayerAdapter = require("vlc_player_adapter")
+local L = require("locale")
 
 --- Wrap status text with <br> breaks, breaking at whitespace and directory slashes
 local function wrap_status_text(text, max_len, max_lines)
@@ -89,9 +90,8 @@ local app = {
     repo               = nil,
     dlg                = nil,
     workdir_input      = nil,
-    scn_dropdown       = nil,
-    dropdown_files     = {},
     path_input         = nil,
+    media_box          = nil,
     list               = nil,
     start_input        = nil,
     end_input          = nil,
@@ -134,17 +134,17 @@ function app:set_status(msg, level)
         for i = 1, max_visible_lines - 1 do
             table.insert(display_lines, html_escape(raw_lines[i]))
         end
-        table.insert(display_lines, "... (see log file for full details)")
+        table.insert(display_lines, L.status_truncated_log)
     end
 
     local formatted = table.concat(display_lines, "<br>")
-    local html = string.format("<div style='font-family:sans-serif; font-size:11px; margin:0; padding:0; line-height:1.3; word-wrap:break-word; color:%s;'>%s</div>", color, formatted)
+    local html = string.format("<div style='font-family:sans-serif; font-size:13px; margin:0; padding:0; line-height:1.35; word-wrap:break-word; color:%s;'>%s</div>", color, formatted)
 
     if self.status_box then
         self.status_box:set_text(html)
     end
     if vlc and vlc.msg then
-        vlc.msg.dbg("[SceneMarker] " .. msg:gsub("<[^>]+>", ""))
+        vlc.msg.dbg("[MediaCutter] " .. msg:gsub("<[^>]+>", ""))
     end
 end
 
@@ -160,22 +160,25 @@ end
 
 function app:get_scn_path()
     local p = ""
-    if self.path_input then
-        p = self.path_input:get_text() or ""
-    end
-
-    -- If path_input is empty, check if a file is selected in dropdown
-    if (not p or p:match("^%s*$")) and self.scn_dropdown and self.dropdown_files then
-        local sel_id = self.scn_dropdown:get_value()
-        local n = tonumber(sel_id)
-        if n and self.dropdown_files[n] then
-            p = self.dropdown_files[n]
-        end
+    if self.path_input and self.path_input:get_text() and self.path_input:get_text():match("%S") then
+        p = self.path_input:get_text()
+    elseif self.loaded_scn_path and self.loaded_scn_path ~= "" then
+        return self.loaded_scn_path
     end
 
     local wd = self:get_work_dir()
     local fallback = VlcPlayerAdapter.guess_work_dir()
-    return Platform.resolve_scn(p, wd, fallback)
+    if p and p:match("%S") then
+        return Platform.resolve_scn(p, wd, fallback)
+    end
+
+    local guessed = VlcPlayerAdapter.guess_scn_path()
+    if guessed ~= "" then
+        local basename = guessed:match("([^\\/]+)$") or guessed
+        return Platform.resolve_scn(basename, wd, fallback)
+    end
+
+    return ""
 end
 
 function app:cancel_edit()
@@ -189,37 +192,31 @@ end
 function app:refresh_list()
     if not self.list then return end
     self.list:clear()
-    self.list:add_value(Scene.TABLE_HEADER, 0)
+    self.list:add_value(L.table_header, 0)
 
     for _, sc in ipairs(self.repo.scenes) do
         self.list:add_value(sc:to_table_row(), sc.id)
     end
 end
 
---- Scan working directory for .scn files and update the dropdown widget
--- @param dir string Directory path to scan
--- @return number Count of .scn files found
-function app:scan_and_populate_dropdown(dir)
-    if not self.scn_dropdown then return 0 end
-    self.scn_dropdown:clear()
-    self.dropdown_files = {}
-
-    if not dir or dir == "" then
-        self.scn_dropdown:add_value("(No directory set)", 0)
-        return 0
+--- Update active media banner at top of dialog
+function app:update_media_display()
+    if not self.media_box then return end
+    local media_name = (VlcPlayerAdapter.get_media_name and VlcPlayerAdapter.get_media_name()) or ""
+    if media_name == "" then
+        local video_path = VlcPlayerAdapter.get_video_path()
+        if video_path and video_path ~= "" then
+            media_name = video_path:match("([^\\/]+)$") or video_path
+        end
     end
 
-    local files = Platform.list_scn_files(dir)
-    if #files == 0 then
-        self.scn_dropdown:add_value("(No .scn files found)", 0)
-        return 0
+    local text
+    if media_name and media_name ~= "" then
+        text = string.format("%s <span style='color:#1976d2; font-weight:bold;'>%s</span>", L.media_header, html_escape(media_name))
+    else
+        text = string.format("%s <span style='color:#777;'>%s</span>", L.media_header, L.media_none)
     end
-
-    for i, file in ipairs(files) do
-        self.dropdown_files[i] = file
-        self.scn_dropdown:add_value(file, i)
-    end
-    return #files
+    self.media_box:set_text(text)
 end
 
 --- Action handler for 'Set Dir' button
@@ -229,7 +226,7 @@ function app:on_set_work_dir()
 
     local wd = self:get_work_dir()
     if not wd or wd == "" then
-        self:set_status("⚠️ Please enter a working directory path.", "warn")
+        self:set_status(L.warn_enter_workdir, "warn")
         return
     end
 
@@ -239,33 +236,142 @@ function app:on_set_work_dir()
         return
     end
 
-    local count = self:scan_and_populate_dropdown(wd)
-    if was_created then
-        self:set_status(string.format("📁 ✨ Created new directory & set Work Dir: %s (%d .scn files)", wd, count), "success")
-    else
-        self:set_status(string.format("📁 Set Work Dir: %s (Found %d .scn file%s)", wd, count, count == 1 and "" or "s"))
+    -- Derive .scn filename from media stem
+    local guessed = VlcPlayerAdapter.guess_scn_path()
+    local scn_filename = "new_scenes.scn"
+    if guessed and guessed ~= "" then
+        scn_filename = guessed:match("([^\\/]+)$") or guessed
     end
+
+    local target_path = Platform.resolve_scn(scn_filename, wd, wd)
+    local action_msg = ""
+
+    local f = io.open(target_path, "r")
+    if f then
+        f:close()
+        -- Exists: load it
+        self:cancel_edit()
+        local load_ok, res = self.repo:load(target_path)
+        if load_ok then
+            self.loaded_scn_path = target_path
+            self.loaded_video_path = VlcPlayerAdapter.get_video_path()
+            self:refresh_list()
+            action_msg = string.format(L.status_loaded_scenes, res, scn_filename)
+        else
+            action_msg = string.format(L.warn_found_load_failed, scn_filename, tostring(res))
+        end
+    else
+        -- Does not exist: create new empty file with media stem
+        self:cancel_edit()
+        if self.repo then
+            self.repo:clear()
+        end
+        local save_ok, err = self.repo:save(target_path)
+        if save_ok then
+            self.loaded_scn_path = target_path
+            self.loaded_video_path = VlcPlayerAdapter.get_video_path()
+            self:refresh_list()
+            action_msg = string.format(L.status_created_empty, scn_filename)
+        else
+            action_msg = string.format(L.err_create_file_failed, tostring(err))
+        end
+    end
+
+    -- Keep only filename in path_input
+    if self.path_input then
+        self.path_input:set_text(scn_filename)
+    end
+
+    self:update_media_display()
+
+    -- Scan and print available .scn files in the working directory
+    local available = Platform.list_scn_files(wd)
+    local avail_str = ""
+    if #available == 0 then
+        avail_str = L.status_avail_files .. ": " .. L.status_avail_none
+    else
+        avail_str = string.format("%s (%d): %s", L.status_avail_files, #available, table.concat(available, ", "))
+    end
+
+    local dir_header = was_created and string.format(L.status_created_dir, wd) or string.format(L.status_set_dir, wd)
+    self:set_status(dir_header .. "<br>" .. action_msg .. "<br>" .. avail_str, "success")
 end
 
---- Action handler for 'Select' dropdown button
-function app:on_select_from_dropdown()
+--- Action handler for 'Set .scn' button
+-- If file exists: loads scenes (Load role). If new file: starts fresh empty file (New role).
+function app:on_set_scn_file()
     self.pending_delete_ids = nil
-    self.pending_new_confirm = nil
 
-    if not self.scn_dropdown or not self.dropdown_files then return end
-    local sel_id = self.scn_dropdown:get_value()
-    local n = tonumber(sel_id)
-    local selected_file = n and self.dropdown_files[n]
-
-    if not selected_file or selected_file == "" then
-        self:set_status("⚠️ No valid .scn file selected in dropdown.", "warn")
+    local raw_p = self.path_input and self.path_input:get_text() or ""
+    if not raw_p or raw_p:match("^%s*$") then
+        self.pending_new_confirm = nil
+        self:set_status(L.warn_enter_scn, "warn")
         return
     end
 
-    if self.path_input then
-        self.path_input:set_text(selected_file)
+    local resolved_path = self:get_scn_path()
+    if not resolved_path or resolved_path == "" then
+        self.pending_new_confirm = nil
+        self:set_status(L.err_resolve_scn, "error")
+        return
     end
-    self:set_status(string.format("📋 Selected: %s. Click 'Load' to open scenes.", selected_file))
+
+    local wd = self:get_work_dir() or VlcPlayerAdapter.guess_work_dir()
+    local basename = resolved_path:match("([^\\/]+)$") or resolved_path
+
+    local f = io.open(resolved_path, "r")
+    if f then
+        f:close()
+        self.pending_new_confirm = nil
+        self:cancel_edit()
+        -- File exists: Load it
+        local ok, res = self.repo:load(resolved_path)
+        if not ok then
+            self:set_status(string.format(L.err_load_file_failed, tostring(res)), "error")
+            return
+        end
+        self.loaded_scn_path = resolved_path
+        self.loaded_video_path = VlcPlayerAdapter.get_video_path()
+        self:refresh_list()
+        self:update_media_display()
+        if self.path_input then
+            self.path_input:set_text(basename)
+        end
+        self:set_status(string.format(L.status_set_scn_loaded, res, basename), "success")
+    else
+        -- File does not exist: Play 'New' role
+        if self.repo and self.repo:count() > 0 and not self.pending_new_confirm then
+            self.pending_new_confirm = true
+            self:set_status(string.format(L.warn_confirm_new_file, self.repo:count(), basename), "warn")
+            return
+        end
+        self.pending_new_confirm = nil
+
+        self:cancel_edit()
+        if self.repo then
+            self.repo:clear()
+        end
+
+        local dir_part = resolved_path:match("^(.*[\\/])")
+        if dir_part then
+            Platform.ensure_dir(dir_part)
+        end
+
+        local ok, err = self.repo:save(resolved_path)
+        if not ok then
+            self:set_status(string.format(L.err_create_new_scn_failed, tostring(err)), "error")
+            return
+        end
+
+        self.loaded_scn_path = resolved_path
+        self.loaded_video_path = VlcPlayerAdapter.get_video_path()
+        self:refresh_list()
+        self:update_media_display()
+        if self.path_input then
+            self.path_input:set_text(basename)
+        end
+        self:set_status(string.format(L.status_set_scn_created, basename), "success")
+    end
 end
 
 function app:on_new_file()
@@ -273,7 +379,7 @@ function app:on_new_file()
 
     if self.repo and self.repo:count() > 0 and not self.pending_new_confirm then
         self.pending_new_confirm = true
-        self:set_status("⚠️ In-memory scene list is not empty. Click 'New' again to clear and start fresh.", "warn")
+        self:set_status(L.warn_confirm_new_inmem, "warn")
         return
     end
     self.pending_new_confirm = nil
@@ -299,7 +405,7 @@ function app:on_new_file()
         end
     end
 
-    self:set_status("✨ Started new empty scene list. Set .scn File, mark timestamps, and click Add / Save Scene.")
+    self:set_status(L.status_new_started)
 end
 
 function app:on_load_file()
@@ -309,14 +415,14 @@ function app:on_load_file()
 
     local path = self:get_scn_path()
     if not path or path == "" then
-        self:set_status("⚠️ Please enter a valid .scn file path.")
+        self:set_status(L.warn_enter_valid_scn)
         return
     end
 
     local f = io.open(path, "r")
     if not f then
         local basename = path:match("([^\\/]+)$") or path
-        self:set_status(string.format("❌ File not found: '%s'. Click 'New' to create a new scene file.", basename), "error")
+        self:set_status(string.format(L.err_file_not_found, basename), "error")
         return
     end
     f:close()
@@ -324,9 +430,9 @@ function app:on_load_file()
     local ok, res = self.repo:load(path)
     if not ok then
         self.list:clear()
-        self.list:add_value(Scene.TABLE_HEADER, 0)
-        self.list:add_value("Could not open file.", 1)
-        self:set_status("❌ " .. tostring(res), "error")
+        self.list:add_value(L.table_header, 0)
+        self.list:add_value(L.err_open_file_failed, 1)
+        self:set_status(string.format(L.err_load_file_failed, tostring(res)), "error")
         return
     end
 
@@ -334,8 +440,9 @@ function app:on_load_file()
     self.loaded_video_path = VlcPlayerAdapter.get_video_path()
 
     self:refresh_list()
+    self:update_media_display()
     local basename = path:match("([^\\/]+)$") or path
-    self:set_status(string.format("✅ Loaded %d scene(s) from %s", res, basename))
+    self:set_status(string.format(L.status_loaded_scenes, res, basename))
 end
 
 function app:on_save_as()
@@ -344,58 +451,55 @@ function app:on_save_as()
 
     local path = self:get_scn_path()
     if not path or path == "" then
-        self:set_status("⚠️ Target .scn file path is required to save scenes.")
+        self:set_status(L.warn_target_scn_req)
         return
     end
 
     if not self.repo or self.repo:count() == 0 then
-        self:set_status("⚠️ No scenes to save. Add scenes first.", "warn")
+        self:set_status(L.warn_no_scenes_to_save, "warn")
         return
     end
 
     local ok, res = self.repo:save(path)
     if not ok then
-        self:set_status("❌ Failed to save file: " .. tostring(res), "error")
+        self:set_status(string.format(L.err_save_file_failed, tostring(res)), "error")
         return
     end
 
     self.loaded_scn_path = path
     self.loaded_video_path = VlcPlayerAdapter.get_video_path()
+    self:update_media_display()
     local basename = path:match("([^\\/]+)$") or path
-    self:set_status(string.format("💾 Saved %d scene(s) to %s", self.repo:count(), basename))
-
-    -- Refresh dropdown to show newly saved file
-    local wd = self:get_work_dir()
-    if wd and wd ~= "" then
-        self:scan_and_populate_dropdown(wd)
-    end
+    self:set_status(string.format(L.status_saved_scenes, self.repo:count(), basename))
 end
 
 function app:on_mark_start()
     self.pending_new_confirm = nil
+    self:update_media_display()
     local tc, err = VlcPlayerAdapter.get_current_time()
     if not tc then
-        self:set_status("⚠️ Cannot mark Start: " .. err)
+        self:set_status(string.format(L.warn_cannot_mark_start, err))
         return
     end
 
     if self.start_input then
         self.start_input:set_text(tc:to_string(true, ","))
-        self:set_status("⏱️ Start marked: " .. tc:to_string(true, ","))
+        self:set_status(string.format(L.status_start_marked, tc:to_string(true, ",")))
     end
 end
 
 function app:on_mark_end()
     self.pending_new_confirm = nil
+    self:update_media_display()
     local tc, err = VlcPlayerAdapter.get_current_time()
     if not tc then
-        self:set_status("⚠️ Cannot mark End: " .. err)
+        self:set_status(string.format(L.warn_cannot_mark_end, err))
         return
     end
 
     if self.end_input then
         self.end_input:set_text(tc:to_string(true, ","))
-        self:set_status("⏱️ End marked: " .. tc:to_string(true, ","))
+        self:set_status(string.format(L.status_end_marked, tc:to_string(true, ",")))
     end
 end
 
@@ -405,7 +509,7 @@ function app:on_save_scene()
 
     local path = self:get_scn_path()
     if not path or path == "" then
-        self:set_status("⚠️ Target .scn file path is required to save scene.")
+        self:set_status(L.warn_target_scn_req_single)
         return
     end
 
@@ -415,13 +519,13 @@ function app:on_save_scene()
 
     local start_tc, s_err = TimeCode.from_string(s_text)
     if not start_tc then
-        self:set_status("⚠️ Invalid Start time: " .. tostring(s_err))
+        self:set_status(string.format(L.warn_invalid_start, tostring(s_err)))
         return
     end
 
     local end_tc, e_err = TimeCode.from_string(e_text)
     if not end_tc then
-        self:set_status("⚠️ Invalid End time: " .. tostring(e_err))
+        self:set_status(string.format(L.warn_invalid_end, tostring(e_err)))
         return
     end
 
@@ -434,7 +538,7 @@ function app:on_save_scene()
         local current_sc = target_sc and self.repo:get_by_id(target_sc.id)
         if not current_sc or current_sc ~= target_sc then
             self:cancel_edit()
-            self:set_status("⚠️ The scene being edited was deleted or reloaded. Edit cancelled.", "warn")
+            self:set_status(L.warn_scene_edit_cancelled, "warn")
             return
         end
 
@@ -446,15 +550,15 @@ function app:on_save_scene()
 
         local save_ok, save_err = self.repo:save(path)
         if not save_ok then
-            self:set_status("⚠️ Updated in memory, but failed to save file: " .. tostring(save_err))
+            self:set_status(string.format(L.warn_updated_mem_failed_save, tostring(save_err)))
         else
-            self:set_status(string.format("✅ Updated & saved Scene %d: '%s'", res.id, res.title))
+            self:set_status(string.format(L.status_scene_updated, res.id, res.title))
         end
 
         self:cancel_edit()
     else
         if title:match("^%s*$") then
-            title = string.format("Scene %d", self.repo:count() + 1)
+            title = string.format(L.default_scene_title, self.repo:count() + 1)
         end
 
         local ok, res = self.repo:add(start_tc, end_tc, title)
@@ -465,9 +569,9 @@ function app:on_save_scene()
 
         local save_ok, save_err = self.repo:save(path)
         if not save_ok then
-            self:set_status("⚠️ Added in memory, but failed to save file: " .. tostring(save_err))
+            self:set_status(string.format(L.warn_added_mem_failed_save, tostring(save_err)))
         else
-            self:set_status(string.format("✅ Added & saved Scene %d: '%s'", res.id, res.title))
+            self:set_status(string.format(L.status_scene_added, res.id, res.title))
         end
 
         if self.loaded_video_path == "" then
@@ -485,7 +589,7 @@ end
 function app:on_edit_selected()
     self.pending_delete_ids = nil
     self.pending_new_confirm = nil
-    local sc, err = self:get_selected_scene("Edit")
+    local sc, err = self:get_selected_scene(L.action_edit)
     if not sc then
         self:set_status("⚠️ " .. err)
         return
@@ -494,7 +598,7 @@ function app:on_edit_selected()
     -- Toggle edit mode off if already editing this exact scene
     if self.editing_scene == sc or self.editing_scene_id == sc.id then
         self:cancel_edit()
-        self:set_status(string.format("Cancelled editing Scene %d.", sc.id))
+        self:set_status(string.format(L.status_edit_cancelled, sc.id))
         return
     end
 
@@ -503,7 +607,7 @@ function app:on_edit_selected()
     if self.start_input then self.start_input:set_text(sc.start_tc:to_string(true, ",")) end
     if self.end_input then self.end_input:set_text(sc.end_tc:to_string(true, ",")) end
     if self.title_input then self.title_input:set_text(sc.title) end
-    self:set_status(string.format("✏️ Editing Scene %d: modify Start, End, or Title, then click Add / Save Scene (or click ✏️ Edit to cancel).", sc.id))
+    self:set_status(string.format(L.status_editing_scene, sc.id))
 end
 
 function app:get_selected_scenes()
@@ -532,15 +636,15 @@ function app:get_selected_scene(action_name)
     if not self.list then return nil end
     local sel = self.list:get_selection()
     if not sel or next(sel) == nil then
-        return nil, "No scene selected from the list"
+        return nil, L.err_no_scene_selected
     end
 
     local scenes = self:get_selected_scenes()
     if #scenes == 0 then
-        return nil, "Header row selected; please select a scene row"
+        return nil, L.err_header_row_selected
     elseif #scenes > 1 then
-        action_name = action_name or "This action"
-        return nil, string.format("Multiple scenes selected (%d selected); '%s' only applies to a single scene.", #scenes, action_name)
+        action_name = action_name or L.action_default
+        return nil, string.format(L.err_multi_scene_selected, #scenes, action_name)
     end
     return scenes[1]
 end
@@ -548,7 +652,7 @@ end
 function app:on_jump_to_start()
     self.pending_delete_ids = nil
     self.pending_new_confirm = nil
-    local sc, err = self:get_selected_scene("To Start")
+    local sc, err = self:get_selected_scene(L.action_to_start)
     if not sc then
         self:set_status("⚠️ " .. err)
         return
@@ -558,14 +662,14 @@ function app:on_jump_to_start()
     if not ok then
         self:set_status("❌ " .. seek_err)
     else
-        self:set_status(string.format("▶ Jumped Scene %d Start: %s", sc.id, sc.start_tc:to_string(true, ",")))
+        self:set_status(string.format(L.status_jumped_start, sc.id, sc.start_tc:to_string(true, ",")))
     end
 end
 
 function app:on_jump_to_end()
     self.pending_delete_ids = nil
     self.pending_new_confirm = nil
-    local sc, err = self:get_selected_scene("To End")
+    local sc, err = self:get_selected_scene(L.action_to_end)
     if not sc then
         self:set_status("⚠️ " .. err)
         return
@@ -575,7 +679,7 @@ function app:on_jump_to_end()
     if not ok then
         self:set_status("❌ " .. seek_err)
     else
-        self:set_status(string.format("⏹ Jumped Scene %d End: %s", sc.id, sc.end_tc:to_string(true, ",")))
+        self:set_status(string.format(L.status_jumped_end, sc.id, sc.end_tc:to_string(true, ",")))
     end
 end
 
@@ -584,13 +688,13 @@ function app:on_cut_selected()
     self.pending_new_confirm = nil
     local scenes = self:get_selected_scenes()
     if #scenes == 0 then
-        self:set_status("⚠️ Please select one or more scenes from the list", "warn")
+        self:set_status(L.warn_select_scenes_cut, "warn")
         return
     end
 
     local video_path = VlcPlayerAdapter.get_video_path()
     if not video_path or video_path == "" then
-        self:set_status("⚠️ Cannot determine playing video file path", "warn")
+        self:set_status(L.warn_cannot_find_video, "warn")
         return
     end
 
@@ -598,7 +702,7 @@ function app:on_cut_selected()
     if self.loaded_video_path ~= "" and video_path ~= self.loaded_video_path then
         local old_name = self.loaded_video_path:match("([^\\/]+)$") or self.loaded_video_path
         local cur_name = video_path:match("([^\\/]+)$") or video_path
-        self:set_status(string.format("❌ Video mismatch: Loaded scenes belong to '%s', but VLC is playing '%s'. Please reload the .scn file.", old_name, cur_name), "error")
+        self:set_status(string.format(L.err_video_mismatch, old_name, cur_name), "error")
         return
     end
 
@@ -608,7 +712,7 @@ function app:on_cut_selected()
 
     for i, sc in ipairs(scenes) do
         if #scenes > 1 then
-            self:set_status(string.format("⏳ Cutting scene %d of %d: '%s'...", i, #scenes, sc.title))
+            self:set_status(string.format(L.status_cutting_progress, i, #scenes, sc.title))
             if self.dlg and self.dlg.update then self.dlg:update() end
         end
 
@@ -622,16 +726,16 @@ function app:on_cut_selected()
 
     if #failed > 0 then
         local err_summary = table.concat(failed, "\n")
-        self:set_status(string.format("⚠️ Cut %d of %d scene(s). Errors:\n%s", cut_count, #scenes, err_summary), "error")
+        self:set_status(string.format(L.warn_err_cut_batch, cut_count, #scenes, err_summary), "error")
     else
         if #scenes == 1 then
             local sc = scenes[1]
             local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
             local basename = out_path:match("([^\\/]+)$") or out_path
-            self:set_status(string.format("✅ Scene %d cut complete: %s\nSaved to: %s", sc.id, basename, out_path), "success")
+            self:set_status(string.format(L.status_single_cut_complete, sc.id, basename, out_path), "success")
         else
-            local target_dir = (work_dir and work_dir ~= "") and work_dir or (video_path:match("^(.*[\\/])") or "working directory")
-            self:set_status(string.format("✅ Batch cut complete: all %d scenes cut successfully!\nSaved to: %s", cut_count, target_dir), "success")
+            local target_dir = (work_dir and work_dir ~= "") and work_dir or (video_path:match("^(.*[\\/])") or L.fallback_work_dir)
+            self:set_status(string.format(L.status_batch_cut_complete, cut_count, target_dir), "success")
         end
     end
 end
@@ -640,7 +744,7 @@ function app:on_delete_selected()
     self.pending_new_confirm = nil
     local scenes = self:get_selected_scenes()
     if #scenes == 0 then
-        self:set_status("⚠️ Please select one or more scenes to delete", "warn")
+        self:set_status(L.warn_select_scenes_delete, "warn")
         self.pending_delete_ids = nil
         return
     end
@@ -665,7 +769,7 @@ function app:on_delete_selected()
 
         if not is_confirmed then
             self.pending_delete_ids = ids
-            self:set_status(string.format("⚠️ Delete %d scenes? Click 🗑️ Delete again to confirm (or click any other button to cancel).", #ids), "warn")
+            self:set_status(string.format(L.warn_confirm_del_multi, #ids), "warn")
             return
         end
     end
@@ -683,19 +787,19 @@ function app:on_delete_selected()
     if path and path ~= "" then
         local save_ok, save_err = self.repo:save(path)
         if not save_ok then
-            self:set_status(string.format("⚠️ Deleted %d scene(s) in memory, but failed to save file: %s", res, tostring(save_err)))
+            self:set_status(string.format(L.warn_del_mem_failed_save, res, tostring(save_err)))
         else
             if #scenes == 1 then
-                self:set_status(string.format("🗑️ Deleted Scene %d: '%s'", scenes[1].id, scenes[1].title))
+                self:set_status(string.format(L.status_deleted_single, scenes[1].id, scenes[1].title))
             else
-                self:set_status(string.format("🗑️ Deleted %d scenes and reindexed remaining scenes in .scn", res))
+                self:set_status(string.format(L.status_deleted_multi_reindexed, res))
             end
         end
     else
         if #scenes == 1 then
-            self:set_status(string.format("🗑️ Deleted Scene %d: '%s'.", scenes[1].id, scenes[1].title))
+            self:set_status(string.format(L.status_deleted_single, scenes[1].id, scenes[1].title))
         else
-            self:set_status(string.format("🗑️ Deleted %d scene(s).", res))
+            self:set_status(string.format(L.status_deleted_multi, res))
         end
     end
 
@@ -708,12 +812,12 @@ function app:on_export_script()
 
     local video_path = VlcPlayerAdapter.get_video_path()
     if not video_path or video_path == "" then
-        self:set_status("⚠️ Cannot determine playing video file path", "warn")
+        self:set_status(L.warn_cannot_find_video, "warn")
         return
     end
 
     if not self.repo or self.repo:count() == 0 then
-        self:set_status("⚠️ No scenes to export into script", "warn")
+        self:set_status(L.warn_no_scenes_export, "warn")
         return
     end
 
@@ -721,7 +825,7 @@ function app:on_export_script()
     if self.loaded_video_path ~= "" and video_path ~= self.loaded_video_path then
         local old_name = self.loaded_video_path:match("([^\\/]+)$") or self.loaded_video_path
         local cur_name = video_path:match("([^\\/]+)$") or video_path
-        self:set_status(string.format("❌ Video mismatch: Loaded scenes belong to '%s', but VLC is playing '%s'. Please reload the .scn file.", old_name, cur_name), "error")
+        self:set_status(string.format(L.err_video_mismatch, old_name, cur_name), "error")
         return
     end
 
@@ -734,15 +838,19 @@ function app:on_export_script()
     end
 
     local work_dir = self:get_work_dir()
-    local ok, res = CutterService.export_script(video_path, targets, nil, work_dir)
+    local scn_path = self.loaded_scn_path
+    if not scn_path or scn_path == "" then
+        scn_path = self:get_scn_path()
+    end
+    local ok, res = CutterService.export_script(video_path, targets, nil, work_dir, scn_path)
     if not ok then
-        self:set_status("❌ Export script failed: " .. tostring(res), "error")
+        self:set_status(string.format(L.err_export_script_failed, tostring(res)), "error")
     else
         local basename = res:match("([^\\/]+)$") or res
         if #targets < self.repo:count() then
-            self:set_status(string.format("🎬 Exported cut script for %d selected scene(s): %s", #targets, basename), "success")
+            self:set_status(string.format(L.status_script_selected, #targets, basename), "success")
         else
-            self:set_status(string.format("🎬 Cut script exported (%d scenes): %s", #targets, basename), "success")
+            self:set_status(string.format(L.status_script_exported, #targets, basename), "success")
         end
     end
 end

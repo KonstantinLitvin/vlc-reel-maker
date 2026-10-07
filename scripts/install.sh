@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Installer script for VLC Scene Marker extension
+# Installer script for VLC MediaCutter extension
 # Installs to Snap VLC and native system VLC extension directories
+# Usage: ./scripts/install.sh [locale]  (e.g., ./scripts/install.sh ru)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 echo "=================================================="
-echo "Building VLC Scene Marker Extension bundle..."
+echo "Building VLC MediaCutter Extension bundle..."
 echo "=================================================="
-"${SCRIPT_DIR}/build.sh"
+"${SCRIPT_DIR}/build.sh" "$@"
 
 DIST_FILE="${REPO_ROOT}/dist/scene-marker.lua"
 
@@ -25,7 +26,7 @@ DEST_DIRS=(
 )
 
 echo "=================================================="
-echo "Installing VLC Scene Marker Extension"
+echo "Installing VLC MediaCutter Extension"
 echo "=================================================="
 
 installed_count=0
@@ -50,5 +51,5 @@ fi
 
 echo "=================================================="
 echo "Installation complete!"
-echo "Restart VLC, then open: View -> Scene Marker"
+echo "Restart VLC, then open: View -> MediaCutter"
 echo "=================================================="

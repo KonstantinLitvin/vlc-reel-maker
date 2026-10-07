@@ -1,9 +1,21 @@
 #!/usr/bin/env luajit
 -- scripts/build.lua
--- Micro-bundler for Scene Marker VLC extension
+-- Micro-bundler for MediaCutter VLC extension
 -- Bundles modular Lua sources in src/ into a single dist/scene-marker.lua file
 
+local lang = (arg and arg[1]) or os.getenv("LANG_TARGET") or "en"
+local out_path = (arg and arg[2]) or "dist/scene-marker.lua"
+local locale_file = string.format("src/locales/%s.lua", lang)
+
+local check_locale = io.open(locale_file, "r")
+if not check_locale then
+    io.stderr:write(string.format("Error: Locale catalog '%s' not found for language '%s'\n", locale_file, lang))
+    os.exit(1)
+end
+check_locale:close()
+
 local modules = {
+    { name = "locale",             file = locale_file },
     { name = "timecode",           file = "src/timecode.lua" },
     { name = "scene",              file = "src/scene.lua" },
     { name = "platform",           file = "src/platform.lua" },
@@ -22,7 +34,6 @@ else
     os.execute('mkdir -p dist 2>/dev/null')
 end
 
-local out_path = "dist/scene-marker.lua"
 local out_f, err = io.open(out_path, "w")
 if not out_f then
     io.stderr:write("Error opening output file " .. out_path .. ": " .. tostring(err) .. "\n")
@@ -30,8 +41,9 @@ if not out_f then
 end
 
 -- Write header
-out_f:write([=[-- VLC Lua Extension : SceneMarker
+out_f:write(string.format([=[-- VLC Lua Extension : MediaCutter
 -- Version           : 1.2
+-- Language          : %s
 -- Author            : Konstantin Litvin & Antigravity
 -- Description       : Fragment capture (Mark In / Mark Out), scene navigation, FFmpeg cutting, and .scn persistence
 --
@@ -57,7 +69,7 @@ local function require(name)
     error("Module not found: " .. tostring(name))
 end
 
-]=])
+]=], lang))
 
 -- Bundle each module
 for _, mod in ipairs(modules) do
@@ -93,4 +105,4 @@ local check_f = io.open(out_path, "r")
 local total_bytes = check_f and check_f:seek("end") or 0
 if check_f then check_f:close() end
 
-print(string.format("[BUILD] Successfully bundled %d modules into %s (%d bytes)", #modules, out_path, total_bytes))
+print(string.format("[BUILD] Successfully bundled %d modules (locale: %s) into %s (%d bytes)", #modules, lang, out_path, total_bytes))

@@ -2,6 +2,7 @@
 -- Domain Entity: Scene
 --------------------------------------------------
 local TimeCode = require("timecode")
+local L = require("locale")
 
 local Scene = {}
 Scene.__index = Scene
@@ -32,7 +33,11 @@ function Scene:duration()
     return self.end_tc.total_sec - self.start_tc.total_sec
 end
 
-Scene.TABLE_HEADER = "ID   Start                   End                     Title"
+Scene.TABLE_HEADER = L.table_header
+
+function Scene.get_table_header()
+    return L.table_header
+end
 
 function Scene:to_table_row()
     return string.format(

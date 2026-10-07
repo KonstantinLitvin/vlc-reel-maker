@@ -78,18 +78,18 @@ _G.vlc = {
     deactivate = function() end
 }
 
--- Load target distribution bundle (build if missing)
-local script_path = "dist/scene-marker.lua"
-local chunk, load_err = loadfile(script_path)
+-- Build a hermetic English test bundle so test assertions remain reproducible
+-- regardless of local distribution build locale.
+local test_bundle = "dist/scene-marker-test.lua"
+local build_cmd = "luajit scripts/build.lua en " .. test_bundle .. " 2>/dev/null || luajit ../scripts/build.lua en " .. test_bundle .. " 2>/dev/null"
+os.execute(build_cmd)
+local chunk, load_err = loadfile(test_bundle) or loadfile("../" .. test_bundle)
 if not chunk then
-    -- Fallback if run from tests directory
-    chunk, load_err = loadfile("../dist/scene-marker.lua")
+    -- Fallback to default dist
+    local script_path = "dist/scene-marker.lua"
+    chunk, load_err = loadfile(script_path) or loadfile("../" .. script_path)
 end
-if not chunk then
-    os.execute("luajit scripts/build.lua 2>/dev/null || luajit ../scripts/build.lua 2>/dev/null")
-    chunk, load_err = loadfile(script_path) or loadfile("../dist/scene-marker.lua")
-end
-assert(chunk, "Failed to load script: " .. tostring(load_err))
+assert(chunk, "Failed to load test bundle: " .. tostring(load_err))
 chunk()
 
 local T = _G.__TEST_CLASSES__
@@ -218,7 +218,7 @@ end)
 
 test("Scene.TABLE_HEADER and Scene:to_table_row formatting", function()
     assert_true(Scene.TABLE_HEADER ~= nil, "TABLE_HEADER constant exists")
-    assert_eq(Scene.TABLE_HEADER, "ID   Start                   End                     Title", "TABLE_HEADER content matches")
+    assert_eq(Scene.TABLE_HEADER, "№    Start                   End                     Title", "TABLE_HEADER content matches")
     local sc = Scene.new(1, TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Intro")
     local row = sc:to_table_row()
     assert_eq(row, "1     00:00:10,000   00:00:20,000   Intro", "Row format matches calibrated layout")
@@ -272,7 +272,7 @@ end)
 
 test("Extension descriptor and menu() hooks", function()
     local desc = descriptor()
-    assert_eq(desc.title, "Scene Marker", "Descriptor title matches")
+    assert_eq(desc.title, "MediaCutter", "Descriptor title matches")
     assert_eq(desc.capabilities[1], "menu", "Menu capability declared")
 
     local m = menu()
@@ -340,19 +340,27 @@ test("CutterService.generate_script (.sh and .bat)", function()
     assert_true(bat_script:find("pause", 1, true) ~= nil, "Windows script ends with pause")
 end)
 
-test("CutterService.export_script writes executable script to disk", function()
+test("CutterService.export_script writes executable script to disk and includes .scn name", function()
     local tmp_video = "/tmp/test_video_" .. tostring(os.time()) .. ".mp4"
     local scenes = { Scene.new(1, TimeCode.from_seconds(5), TimeCode.from_seconds(15), "Demo") }
 
+    -- 1. Default without scn_path
     local ok, path = CutterService.export_script(tmp_video, scenes, false)
     assert_true(ok, "Export script succeeded")
     assert_true(path:match("_cut_scenes%.sh$") ~= nil, "Output filename has .sh extension")
-
-    local f = io.open(path, "r")
-    assert_true(f ~= nil, "Script file exists on disk")
-    local content = f:read("*a")
-    f:close()
     os.remove(path)
+
+    -- 2. With distinct scn_path
+    local ok2, path2 = CutterService.export_script(tmp_video, scenes, false, "/tmp", "/tmp/highlights.scn")
+    assert_true(ok2, "Export script with scn_path succeeded")
+    assert_true(path2:find("highlights_cut_scenes%.sh") ~= nil, "Output script contains scn name: " .. path2)
+    os.remove(path2)
+
+    -- 3. With scn_path that shares prefix
+    local ok3, path3 = CutterService.export_script(tmp_video, scenes, false, "/tmp", "/tmp/test_video_part1.scn")
+    assert_true(ok3, "Export script with prefixed scn_path succeeded")
+    assert_true(path3:find("part1_cut_scenes%.sh") ~= nil, "Output script preserves stem prefix: " .. path3)
+    os.remove(path3)
 end)
 
 test("CutterService.find_ffmpeg and check_ffmpeg discovery", function()
@@ -892,6 +900,7 @@ test("app:on_export_script exports selected scenes symmetrically with Cut", func
         get_text = function() return "/tmp" end
     }
     app.loaded_video_path = test_video
+    app.loaded_scn_path = "/tmp/test_video_export.scn"
 
     local last_status = ""
     app.set_status = function(self, msg) last_status = msg end
@@ -912,8 +921,20 @@ test("app:on_export_script exports selected scenes symmetrically with Cut", func
     assert_true(script_text:find("Scene 1", 1, true) == nil, "Script does NOT contain unselected Scene 1")
     assert_true(script_text:find("Scene 3", 1, true) == nil, "Script does NOT contain unselected Scene 3")
 
-    -- Restore mock
+    -- Verify exporting with distinct scn name incorporates .scn stem into script filename
+    app.loaded_scn_path = "/tmp/custom_highlights.scn"
+    app:on_export_script()
+    local custom_script = "/tmp/test_video_export_custom_highlights_cut_scenes" .. ext
+    local f_custom = io.open(custom_script, "r")
+    assert_true(f_custom ~= nil, "Script containing custom scn name exists on disk")
+    if f_custom then f_custom:close() end
+    os.remove(custom_script)
+
+    -- Restore mock and state
     T.VlcPlayerAdapter.get_video_path = old_get_video
+    app.list = nil
+    app.loaded_scn_path = ""
+    app.loaded_video_path = ""
 end)
 
 -- 41. Platform directory management & discovery tests
@@ -959,51 +980,73 @@ test("Platform.list_scn_files finds and sorts .scn files only", function()
     os.execute("rm -rf " .. Platform.quote(test_dir, false))
 end)
 
-test("app:scan_and_populate_dropdown and app:on_select_from_dropdown", function()
-    local test_dir = "/tmp/test_dropdown_" .. os.time()
+test("app:update_media_display and app:on_set_scn_file workflow", function()
+    local test_dir = "/tmp/test_set_scn_" .. os.time()
     os.execute("mkdir -p " .. Platform.quote(test_dir, false))
 
-    local f1 = io.open(test_dir .. "/sample_1.scn", "w"); f1:write("test"); f1:close()
-    local f2 = io.open(test_dir .. "/sample_2.scn", "w"); f2:write("test"); f2:close()
+    -- 1. Test update_media_display
+    local media_text = ""
+    T.app.media_box = {
+        set_text = function(self, t) media_text = t end
+    }
+    T.app:update_media_display()
+    assert_true(media_text:find("Media:"), "Media banner formatted")
 
-    local dd_items = {}
-    local dd_val = 0
-    T.app.scn_dropdown = {
-        clear = function() dd_items = {}; dd_val = 0 end,
-        add_value = function(self, text, id)
-            dd_items[id] = text
-            if dd_val == 0 then dd_val = id end
-        end,
-        get_value = function() return dd_val end
+    -- Mock list widget for refresh_list()
+    local list_items = {}
+    T.app.list = {
+        clear = function() list_items = {} end,
+        add_value = function(self, val, id) table.insert(list_items, { val = val, id = id }) end,
+        get_selection = function() return {} end
     }
 
-    local path_val = ""
+    -- 2. Test on_set_scn_file with an existing file
+    local existing_scn = test_dir .. "/existing.scn"
+    local f = io.open(existing_scn, "w")
+    f:write("1\n00:01:00,000 --> 00:02:00,000\nExisting Scene\n")
+    f:close()
+
+    local path_val = existing_scn
     T.app.path_input = {
         get_text = function() return path_val end,
         set_text = function(self, t) path_val = t end
     }
+    if not T.app.repo then
+        T.app.repo = SceneRepository.new()
+    end
 
-    local count = T.app:scan_and_populate_dropdown(test_dir)
-    assert_eq(count, 2, "Found 2 files")
-    assert_eq(T.app.dropdown_files[1], "sample_1.scn", "Dropdown file 1 tracked")
-    assert_eq(T.app.dropdown_files[2], "sample_2.scn", "Dropdown file 2 tracked")
+    T.app:on_set_scn_file()
+    assert_eq(T.app.loaded_scn_path, existing_scn, "Loaded scn path set to existing file")
+    assert_eq(path_val, "existing.scn", "path_input displays bare filename")
+    assert_eq(T.app.repo:count(), 1, "Repo loaded 1 scene from existing file")
+    assert_eq(T.app.repo.scenes[1].title, "Existing Scene", "Scene title loaded correctly")
+    assert_true(#list_items >= 2, "List widget populated with header and scene row")
 
-    -- Select first item (dd_val = 1)
-    T.app:on_select_from_dropdown()
-    assert_eq(path_val, "sample_1.scn", "path_input updated with selected dropdown file")
+    -- 3. Test on_set_scn_file with a new file (plays 'New' role)
+    local new_scn = test_dir .. "/new_scenes.scn"
+    path_val = new_scn
+    -- First call prompts confirmation because repo has 1 scene
+    T.app:on_set_scn_file()
+    assert_true(T.app.pending_new_confirm == true, "Confirmation prompted when in-memory scenes exist")
 
-    -- Select second item
-    dd_val = 2
-    T.app:on_select_from_dropdown()
-    assert_eq(path_val, "sample_2.scn", "path_input updated with second dropdown file")
+    -- Second call confirms and starts new empty file
+    T.app:on_set_scn_file()
+    assert_eq(T.app.loaded_scn_path, new_scn, "Loaded scn path set to new file")
+    assert_eq(path_val, "new_scenes.scn", "path_input displays bare filename for new file")
+    assert_eq(T.app.repo:count(), 0, "Repo initialized to 0 scenes for new file (New role)")
+
+    local f_check = io.open(new_scn, "r")
+    assert_true(f_check ~= nil, "New .scn file was created on disk")
+    if f_check then f_check:close() end
 
     -- Clean up
     os.execute("rm -rf " .. Platform.quote(test_dir, false))
-    T.app.scn_dropdown = nil
-    T.app.dropdown_files = {}
+    T.app.media_box = nil
+    T.app.path_input = nil
+    T.app.list = nil
 end)
 
-test("app:on_set_work_dir creates directory and refreshes dropdown", function()
+test("app:on_set_work_dir creates directory, creates media-stem .scn file, and lists available scn files", function()
     local test_dir = "/tmp/test_set_workdir_" .. os.time()
     os.execute("rm -rf " .. Platform.quote(test_dir, false))
 
@@ -1011,34 +1054,46 @@ test("app:on_set_work_dir creates directory and refreshes dropdown", function()
         get_text = function() return test_dir end
     }
 
-    local dd_items = {}
-    local dd_val = 0
-    T.app.scn_dropdown = {
-        clear = function() dd_items = {}; dd_val = 0 end,
-        add_value = function(self, text, id)
-            dd_items[id] = text
-            if dd_val == 0 then dd_val = id end
-        end,
-        get_value = function() return dd_val end
+    local path_val = "old_file.scn"
+    T.app.path_input = {
+        get_text = function() return path_val end,
+        set_text = function(self, t) path_val = t end
     }
+    T.app.loaded_scn_path = ""
 
     local last_status = ""
     local old_set_status = T.app.set_status
     T.app.set_status = function(self, msg, lvl) last_status = msg end
 
+    -- Mock list for refresh_list
+    T.app.list = {
+        clear = function() end,
+        add_value = function() end,
+        get_selection = function() return {} end
+    }
+
     T.app:on_set_work_dir()
     assert_true(Platform.dir_exists(test_dir, false), "Work dir was created on disk")
     assert_true(last_status:find("Created new directory", 1, true) ~= nil, "Status reports directory creation")
+    assert_true(last_status:find("Available .scn files", 1, true) ~= nil, "Status reports available .scn files")
+    assert_eq(path_val, "sample_movie.scn", "path_input updated to media-stem filename only")
 
-    -- Re-running on existing dir reports set work dir
+    local f_check = io.open(test_dir .. "/sample_movie.scn", "r")
+    assert_true(f_check ~= nil, "Media-stem .scn file was created on disk in new work dir")
+    if f_check then f_check:close() end
+
+    -- Re-running on existing dir reports set work dir and loads existing
     T.app:on_set_work_dir()
     assert_true(last_status:find("Set Work Dir", 1, true) ~= nil, "Status reports work dir set")
+    assert_true(last_status:find("Loaded", 1, true) ~= nil, "Loads existing media-stem file")
 
     -- Clean up
     os.execute("rm -rf " .. Platform.quote(test_dir, false))
     T.app.set_status = old_set_status
-    T.app.scn_dropdown = nil
     T.app.workdir_input = nil
+    T.app.path_input = nil
+    T.app.list = nil
+    T.app.loaded_scn_path = ""
 end)
 
 test("activate() initializes 12-column grid layout correctly", function()
@@ -1081,24 +1136,22 @@ test("activate() initializes 12-column grid layout correctly", function()
     T.activate()
 
     assert_true(T.app.dlg ~= nil, "Dialog was created")
-    assert_eq(#widgets, 28, "All 28 widgets registered in grid")
+    assert_eq(#widgets, 22, "All 22 widgets registered in grid")
 
     -- Verify all rows respect 12 columns
     for _, w in ipairs(widgets) do
         assert_true(w.col + w.col_span - 1 <= 12, string.format("Widget %s at row %d fits in 12 columns", w.type, w.row))
     end
 
-    -- Verify Row 1: 3 equal buttons spanning 4 columns each
-    local r1_buttons = {}
+    -- Verify Row 1: Active Media Banner (Label spanning 12 columns)
+    local r1_media
     for _, w in ipairs(widgets) do
-        if w.row == 1 and w.type == "button" then table.insert(r1_buttons, w) end
+        if w.row == 1 and w.type == "label" then r1_media = w end
     end
-    assert_eq(#r1_buttons, 3, "Row 1 has 3 file buttons")
-    for _, b in ipairs(r1_buttons) do
-        assert_eq(b.col_span, 4, string.format("Row 1 button '%s' spans 4 columns", b.text))
-    end
+    assert_true(r1_media ~= nil, "Row 1 Active Media banner found")
+    assert_eq(r1_media.col_span, 12, "Row 1 Active Media banner spans 12 columns")
 
-    -- Verify Row 2: Work Dir input (span 7) & Set Dir button (span 3)
+    -- Verify Row 2: Work Dir input (span 9) & Set Dir button (span 3)
     local r2_btn, r2_inp
     for _, w in ipairs(widgets) do
         if w.row == 2 and w.type == "button" then r2_btn = w end
@@ -1107,55 +1160,65 @@ test("activate() initializes 12-column grid layout correctly", function()
     assert_true(r2_btn ~= nil, "Row 2 Set Dir button found")
     assert_eq(r2_btn.col_span, 3, "Row 2 Set Dir button spans 3 columns")
     assert_true(r2_inp ~= nil, "Row 2 workdir_input found")
-    assert_eq(r2_inp.col_span, 7, "Row 2 workdir_input spans 7 columns")
+    assert_eq(r2_inp.col_span, 9, "Row 2 workdir_input spans 9 columns")
 
-    -- Verify Row 3: .scn Files dropdown (span 7) & Select button (span 3)
-    local r3_btn, r3_dd
+    -- Verify Row 3: .scn path input (span 9) & Set .scn button (span 3)
+    local r3_btn, r3_inp
     for _, w in ipairs(widgets) do
         if w.row == 3 and w.type == "button" then r3_btn = w end
-        if w.row == 3 and w.type == "dropdown" then r3_dd = w end
+        if w.row == 3 and w.type == "text_input" then r3_inp = w end
     end
-    assert_true(r3_btn ~= nil, "Row 3 Select button found")
-    assert_eq(r3_btn.col_span, 3, "Row 3 Select button spans 3 columns")
-    assert_true(r3_dd ~= nil, "Row 3 dropdown found")
-    assert_eq(r3_dd.col_span, 7, "Row 3 dropdown spans 7 columns")
+    assert_true(r3_btn ~= nil, "Row 3 Set .scn button found")
+    assert_eq(r3_btn.col_span, 3, "Row 3 Set .scn button spans 3 columns")
+    assert_true(r3_inp ~= nil, "Row 3 path_input found")
+    assert_eq(r3_inp.col_span, 9, "Row 3 path_input spans 9 columns")
+    assert_eq(r3_inp.text, "sample_movie.scn", "path_input displays relative filename when inside work_dir")
 
-    -- Verify Row 4: .scn path input displays relative filename and spans 10 columns
-    local path_w
+    -- Verify Rows 4-11: Scenes List view (Row 4, height 8, width 12)
+    local list_w
     for _, w in ipairs(widgets) do
-        if w.row == 4 and w.type == "text_input" then path_w = w end
+        if w.type == "list" then list_w = w end
     end
-    assert_true(path_w ~= nil, "path_input widget found at Row 4")
-    assert_eq(path_w.col_span, 10, "path_input spans 10 columns")
-    assert_eq(path_w.text, "sample_movie.scn", "path_input displays relative filename when inside work_dir")
+    assert_true(list_w ~= nil, "Scenes list widget found")
+    assert_eq(list_w.row, 4, "List starts at row 4")
+    assert_eq(list_w.row_span, 8, "List spans 8 rows")
+    assert_eq(list_w.col_span, 12, "List spans 12 columns")
 
-    -- Verify Row 13: 4 equal buttons spanning 3 columns each
+    -- Verify Row 12: 4 equal buttons spanning 3 columns each
+    local r12_buttons = {}
+    for _, w in ipairs(widgets) do
+        if w.row == 12 and w.type == "button" then table.insert(r12_buttons, w) end
+    end
+    assert_eq(#r12_buttons, 4, "Row 12 has 4 scene buttons")
+    for _, b in ipairs(r12_buttons) do
+        assert_eq(b.col_span, 3, string.format("Row 12 button '%s' spans 3 columns", b.text))
+    end
+
+    -- Verify Row 13: 2 equal buttons spanning 6 columns each
     local r13_buttons = {}
     for _, w in ipairs(widgets) do
         if w.row == 13 and w.type == "button" then table.insert(r13_buttons, w) end
     end
-    assert_eq(#r13_buttons, 4, "Row 13 has 4 scene buttons")
+    assert_eq(#r13_buttons, 2, "Row 13 has 2 FFmpeg buttons")
     for _, b in ipairs(r13_buttons) do
-        assert_eq(b.col_span, 3, string.format("Row 13 button '%s' spans 3 columns", b.text))
+        assert_eq(b.col_span, 6, string.format("Row 13 button '%s' spans 6 columns", b.text))
     end
 
-    -- Verify Row 14: 2 equal buttons spanning 6 columns each
-    local r14_buttons = {}
+    -- Verify input field labels (Rows 14-16) align flush left at col 1 and span 2 columns
     for _, w in ipairs(widgets) do
-        if w.row == 14 and w.type == "button" then table.insert(r14_buttons, w) end
-    end
-    assert_eq(#r14_buttons, 2, "Row 14 has 2 FFmpeg buttons")
-    for _, b in ipairs(r14_buttons) do
-        assert_eq(b.col_span, 6, string.format("Row 14 button '%s' spans 6 columns", b.text))
-    end
-
-    -- Verify all labels align flush left at col 1 and span 2 columns
-    for _, w in ipairs(widgets) do
-        if w.type == "label" then
+        if w.type == "label" and w.row > 1 then
             assert_eq(w.col, 1, string.format("Label '%s' at row %d starts at col 1", w.text, w.row))
             assert_eq(w.col_span, 2, string.format("Label '%s' at row %d spans 2 columns", w.text, w.row))
         end
     end
+
+    -- Verify Row 17: Status box (html, span 12)
+    local r17_status
+    for _, w in ipairs(widgets) do
+        if w.row == 17 and w.type == "html" then r17_status = w end
+    end
+    assert_true(r17_status ~= nil, "Row 17 Status box found")
+    assert_eq(r17_status.col_span, 12, "Row 17 Status box spans 12 columns")
 
     -- Clean up
     T.app.dlg = nil
@@ -1183,6 +1246,70 @@ test("Modular architecture: direct require of src/ modules", function()
 
     package.path = orig_path
 end)
+
+test("Locale catalog parity: en.lua and ru.lua have matching keys", function()
+    local en_chunk = loadfile("src/locales/en.lua") or loadfile("../src/locales/en.lua")
+    assert_true(en_chunk ~= nil, "en.lua must be loadable")
+    local en = en_chunk()
+    assert_true(type(en) == "table", "en.lua returns table")
+
+    local ru_chunk = loadfile("src/locales/ru.lua") or loadfile("../src/locales/ru.lua")
+    assert_true(ru_chunk ~= nil, "ru.lua must be loadable")
+    local ru = ru_chunk()
+    assert_true(type(ru) == "table", "ru.lua returns table")
+
+    local en_keys = 0
+    for k, v in pairs(en) do
+        en_keys = en_keys + 1
+        assert_true(ru[k] ~= nil, string.format("Key '%s' present in en.lua must exist in ru.lua", k))
+        assert_true(type(ru[k]) == "string" and #ru[k] > 0, string.format("Key '%s' in ru.lua must be non-empty string", k))
+    end
+
+    local ru_keys = 0
+    for k, v in pairs(ru) do
+        ru_keys = ru_keys + 1
+        assert_true(en[k] ~= nil, string.format("Key '%s' present in ru.lua must exist in en.lua", k))
+        assert_true(type(en[k]) == "string" and #en[k] > 0, string.format("Key '%s' in en.lua must be non-empty string", k))
+    end
+
+    assert_eq(en_keys, ru_keys, "Catalogs must have identical key count")
+    assert_true(en_keys >= 40, "Catalogs must contain all required translation keys")
+end)
+
+test("Build micro-bundler supports locale module injection (ru)", function()
+    local test_out = "dist/scene-marker-ru-test.lua"
+    local exit_code = os.execute("luajit scripts/build.lua ru " .. test_out .. " >/dev/null 2>&1")
+    assert_true(exit_code == 0 or exit_code == true, "scripts/build.lua ru exits cleanly")
+
+    local f = io.open(test_out, "r")
+    assert_true(f ~= nil, "Output bundle must exist")
+    f:close()
+
+    local ru_chunk, err = loadfile(test_out)
+    assert_true(ru_chunk ~= nil, "Generated Russian bundle must be valid Lua syntax: " .. tostring(err))
+
+    -- Execute in isolated sandbox table
+    local env = {}
+    for k, v in pairs(_G) do env[k] = v end
+    if setfenv then
+        setfenv(ru_chunk, env)
+    end
+    ru_chunk()
+
+    local desc = env.descriptor and env.descriptor() or _G.descriptor()
+    assert_true(desc ~= nil and desc.title == "MediaCutter", "Descriptor title in Russian bundle is MediaCutter")
+
+    local m = env.menu and env.menu() or _G.menu()
+    assert_true(m ~= nil and m[1]:find("Отметить начало", 1, true) ~= nil, "Menu in Russian bundle is localized")
+
+    local L_ru = env.require and env.require("locale")
+    assert_true(L_ru ~= nil and L_ru.table_header:find("№", 1, true) ~= nil, "Table header in Russian bundle uses №")
+
+    os.remove(test_out)
+end)
+
+pcall(os.remove, test_bundle)
+pcall(os.remove, "../" .. test_bundle)
 
 print("--------------------------------------------------")
 print(string.format("Test Results: %d/%d passed (%s)", passed_tests, total_tests, passed_tests == total_tests and "ALL PASSED" or "SOME FAILED"))
