@@ -16,11 +16,12 @@ local wrap_status_text = ui.wrap_status_text
 local html_escape = ui.html_escape
 
 function descriptor()
+    local name = (L.ext_title or "ReelMaker") .. " v" .. (Version or "1.2")
     return {
-        title        = string.format("%s v%s", L.ext_title, Version),
+        title        = name,
         version      = Version,
         author       = "Konstantin Litvin & Antigravity",
-        shortdesc    = L.ext_shortdesc,
+        shortdesc    = name,
         description  = L.ext_desc,
         capabilities = { "menu" }
     }
@@ -33,6 +34,12 @@ function activate()
         app.repo = SceneRepository.new()
     end
     app.dlg = vlc.dialog(string.format("%s v%s", L.ext_title, Version))
+
+    -- Primary Default Button (Add / Save Scene):
+    -- Registered first so Qt QDialog designates it as the dialog's default autoDefault button.
+    -- In Qt, pressing Enter in a single-line text input (such as Title) triggers the dialog's
+    -- default button, invoking on_save_scene(). Grid coordinates remain at row 16, cols 9-12.
+    app.add_save_btn = app.dlg:add_button(L.btn_add_save, function() app:on_save_scene() end, 9, 16, 4, 1)
 
     -- Row 1: Active Media Banner (Label, full width)
     app.media_box = app.dlg:add_label("", 1, 1, 12, 1)
@@ -73,10 +80,9 @@ function activate()
     app.end_input = app.dlg:add_text_input("", 3, 15, 3, 1)
     app.dlg:add_button(L.btn_mark, function() app:on_mark_end() end, 6, 15, 2, 1)
 
-    -- Row 16: Scene Title input & Add/Save Scene button
+    -- Row 16: Scene Title input (Add/Save button registered above as primary default button)
     app.dlg:add_label(L.lbl_title, 1, 16, 2, 1)
     app.title_input = app.dlg:add_text_input("", 3, 16, 6, 1)
-    app.dlg:add_button(L.btn_add_save, function() app:on_save_scene() end, 9, 16, 4, 1)
 
     -- Row 17: Fixed-height Scrollable & Copyable Status Area (QTextBrowser, height ~75-80px / ~4 lines, scrollbar as needed)
     local available = Platform.list_scn_files(initial_work_dir)
@@ -190,6 +196,7 @@ if _G and _G.__TEST__ then
         app              = app,
         wrap_status_text = wrap_status_text,
         html_escape      = html_escape,
+        truncate_middle  = ui.truncate_middle,
         activate         = activate
     }
 end

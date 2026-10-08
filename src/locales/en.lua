@@ -92,6 +92,8 @@ return {
     warn_added_mem_failed_save   = "⚠️ Added in memory, but failed to save file: %s",
     warn_cannot_mark_start       = "⚠️ Cannot mark Start: %s",
     warn_cannot_mark_end         = "⚠️ Cannot mark End: %s",
+    warn_start_exceeds_duration  = "⚠️ Start timestamp (%s) cannot be at or beyond media duration (%s).",
+    warn_end_exceeds_duration    = "⚠️ End timestamp (%s) exceeds media duration (%s).",
     warn_select_scenes_cut       = "⚠️ Please select one or more scenes from the list",
     warn_cannot_find_video       = "⚠️ Cannot determine playing video file path",
     warn_err_cut_batch           = "⚠️ Cut %d of %d scene(s). Errors:\n%s",

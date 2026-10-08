@@ -26,6 +26,36 @@ function VlcPlayerAdapter.get_current_time()
     return TimeCode.from_seconds(us / 1000000)
 end
 
+--- Query active media duration
+-- @return TimeCode, error_message
+function VlcPlayerAdapter.get_media_duration()
+    if not vlc then return nil, "VLC runtime not available" end
+
+    -- Strategy 1: vlc.input.item():duration() (returns seconds as float/int)
+    if vlc.input and vlc.input.item then
+        local item = vlc.input.item()
+        if item and item.duration then
+            local sec = item:duration()
+            if sec and sec > 0 then
+                return TimeCode.from_seconds(sec)
+            end
+        end
+    end
+
+    -- Strategy 2: vlc.var.get(input, "length") (returns microseconds)
+    if vlc.object and vlc.object.input and vlc.var and vlc.var.get then
+        local input = vlc.object.input()
+        if input then
+            local us = vlc.var.get(input, "length")
+            if us and us > 0 then
+                return TimeCode.from_seconds(us / 1000000)
+            end
+        end
+    end
+
+    return nil, "Media duration unavailable"
+end
+
 --- Seek playback to given timecode non-blockingly
 -- @param tc TimeCode
 function VlcPlayerAdapter.seek(tc)

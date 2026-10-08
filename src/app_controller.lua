@@ -86,6 +86,28 @@ local function html_escape(str)
         :gsub('"', "&quot;"))
 end
 
+--- Truncate a filename or string in the middle with an ellipsis (...) preserving UTF-8 codepoints
+-- @param str string Input text
+-- @param max_len number Maximum character length (default: 45)
+-- @return string Truncated string
+local function truncate_middle(str, max_len)
+    max_len = max_len or 45
+    str = tostring(str or "")
+    if max_len < 7 then return str end
+
+    local chars = {}
+    for c in str:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+        table.insert(chars, c)
+    end
+    if #chars <= max_len then return str end
+
+    local head_len = math.floor((max_len - 3) * 0.6)
+    local tail_len = (max_len - 3) - head_len
+    local head = table.concat(chars, "", 1, head_len)
+    local tail = table.concat(chars, "", #chars - tail_len + 1, #chars)
+    return head .. "..." .. tail
+end
+
 local app = {
     repo               = nil,
     dlg                = nil,
@@ -96,6 +118,7 @@ local app = {
     start_input        = nil,
     end_input          = nil,
     title_input        = nil,
+    add_save_btn       = nil,
     status_box         = nil,
     editing_scene      = nil,
     editing_scene_id   = nil,
@@ -212,7 +235,8 @@ function app:update_media_display()
 
     local text
     if media_name and media_name ~= "" then
-        text = string.format("%s <span style='color:#1976d2; font-weight:bold;'>%s</span>", L.media_header, html_escape(media_name))
+        local display_name = truncate_middle(media_name, 45)
+        text = string.format("%s <span style='color:#1976d2; font-weight:bold;'>%s</span>", L.media_header, html_escape(display_name))
     else
         text = string.format("%s <span style='color:#777;'>%s</span>", L.media_header, L.media_none)
     end
@@ -529,6 +553,18 @@ function app:on_save_scene()
         return
     end
 
+    local media_dur = VlcPlayerAdapter.get_media_duration and VlcPlayerAdapter.get_media_duration()
+    if media_dur then
+        if start_tc >= media_dur then
+            self:set_status(string.format(L.warn_start_exceeds_duration, start_tc:to_string(true, ","), media_dur:to_string(true, ",")), "warn")
+            return
+        end
+        if end_tc > media_dur then
+            self:set_status(string.format(L.warn_end_exceeds_duration, end_tc:to_string(true, ","), media_dur:to_string(true, ",")), "warn")
+            return
+        end
+    end
+
     if self.editing_scene or self.editing_scene_id then
         local target_sc = self.editing_scene
         if not target_sc and self.editing_scene_id then
@@ -542,7 +578,7 @@ function app:on_save_scene()
             return
         end
 
-        local ok, res = self.repo:update(target_sc.id, start_tc, end_tc, title)
+        local ok, res = self.repo:update(target_sc.id, start_tc, end_tc, title, media_dur)
         if not ok then
             self:set_status("❌ " .. tostring(res))
             return
@@ -561,7 +597,7 @@ function app:on_save_scene()
             title = string.format(L.default_scene_title, self.repo:count() + 1)
         end
 
-        local ok, res = self.repo:add(start_tc, end_tc, title)
+        local ok, res = self.repo:add(start_tc, end_tc, title, media_dur)
         if not ok then
             self:set_status("❌ " .. tostring(res))
             return
@@ -858,5 +894,6 @@ end
 return {
     app = app,
     wrap_status_text = wrap_status_text,
-    html_escape = html_escape
+    html_escape = html_escape,
+    truncate_middle = truncate_middle
 }

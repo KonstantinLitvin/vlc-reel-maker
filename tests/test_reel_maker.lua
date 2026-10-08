@@ -26,7 +26,8 @@ _G.vlc = {
         seek = function(sec) end,
         item = function()
             return {
-                uri = function() return "file:///home/user/Videos/sample_movie.mp4" end
+                uri = function() return "file:///home/user/Videos/sample_movie.mp4" end,
+                duration = function() return 300.0 end
             }
         end
     },
@@ -209,6 +210,43 @@ test("Scene.new invalid end <= start rejected", function()
     assert_true(sc == nil, "Should reject end <= start")
 end)
 
+test("Scene.new and SceneRepository boundary validation with max_duration", function()
+    local s_tc = TimeCode.from_seconds(10)
+    local e_tc = TimeCode.from_seconds(60)
+    local max_tc = TimeCode.from_seconds(60)
+
+    -- Valid: end == duration (exact last millisecond)
+    local sc, err = Scene.new(1, s_tc, e_tc, "Valid Edge", max_tc)
+    assert_true(sc ~= nil, "Should allow end == max_duration")
+    assert_true(err == nil, "No error on valid boundary")
+
+    -- Invalid: end > duration
+    local e_over = TimeCode.from_seconds(60.1)
+    local sc_bad, err_bad = Scene.new(1, s_tc, e_over, "Over End", max_tc)
+    assert_true(sc_bad == nil, "Should reject end > max_duration")
+    assert_true(err_bad:find("exceeds media duration", 1, true) ~= nil, "Error mentions exceeds media duration")
+
+    -- Invalid: start >= duration
+    local s_over = TimeCode.from_seconds(60)
+    local e_way_over = TimeCode.from_seconds(70)
+    local sc_bad2, err_bad2 = Scene.new(1, s_over, e_way_over, "Over Start", max_tc)
+    assert_true(sc_bad2 == nil, "Should reject start >= max_duration")
+    assert_true(err_bad2:find("cannot be greater than or equal", 1, true) ~= nil, "Error mentions start at or beyond duration")
+
+    -- Repository add with max_duration
+    local repo = SceneRepository.new()
+    local ok_add, res_add = repo:add(s_tc, e_over, "Over End", max_tc)
+    assert_true(not ok_add, "repo:add rejects end > max_duration")
+    assert_true(res_add:find("exceeds media duration", 1, true) ~= nil, "repo:add returns error message")
+
+    -- Repository update with max_duration
+    local ok_ok, sc_ok = repo:add(s_tc, e_tc, "Valid", max_tc)
+    assert_true(ok_ok, "repo:add succeeds for valid edge")
+    local ok_up, res_up = repo:update(1, s_tc, e_over, "Over End", max_tc)
+    assert_true(not ok_up, "repo:update rejects end > max_duration")
+    assert_true(res_up:find("exceeds media duration", 1, true) ~= nil, "repo:update returns error message")
+end)
+
 test("Scene:to_scn_block formatting", function()
     local sc = Scene.new(2, TimeCode.from_seconds(60), TimeCode.from_seconds(120.5), "Dialogue")
     local block = sc:to_scn_block()
@@ -273,6 +311,7 @@ end)
 test("Extension descriptor and menu() hooks", function()
     local desc = descriptor()
     assert_eq(desc.title, "ReelMaker v1.2", "Descriptor title matches")
+    assert_eq(desc.shortdesc, "ReelMaker v1.2", "Descriptor shortdesc matches title for VLC View menu")
     assert_eq(desc.version, "1.2", "Descriptor version matches")
     assert_eq(desc.capabilities[1], "menu", "Menu capability declared")
 
@@ -388,6 +427,10 @@ test("VlcPlayerAdapter: get_current_time, guess_scn_path, and guess_work_dir", f
 
     local work_dir = VlcPlayerAdapter.guess_work_dir()
     assert_eq(work_dir, "/home/user/Videos/", "Guessed work directory correctly")
+
+    local dur, d_err = VlcPlayerAdapter.get_media_duration()
+    assert_true(dur ~= nil, "Media duration returned: " .. tostring(d_err))
+    assert_eq(dur:to_string(true, ","), "00:05:00,000", "Media duration matches mock (300s)")
 end)
 
 -- 7. Work Dir & UI Truncation tests
@@ -433,6 +476,34 @@ test("wrap_status_text path-aware line wrapping and optional line cap", function
     for _ in capped:gmatch("<br>") do capped_count = capped_count + 1 end
     assert_eq(capped_count, 4, "Clamped to 4 lines when max_lines=4")
     assert_true(capped:find("...", 1, true) ~= nil, "Includes ellipsis when clamped")
+end)
+
+test("truncate_middle prevents UI expansion on long media filenames", function()
+    local trunc = T.truncate_middle
+    assert_true(trunc ~= nil, "truncate_middle hook exported")
+    assert_eq(trunc(""), "", "Empty string handled")
+    assert_eq(trunc("short.mp4", 45), "short.mp4", "Short filename untouched")
+
+    -- Long ASCII filename
+    local long_ascii = "A_Very_Long_Movie_Name_2026_1080p_BluRay_x264_DTS_HD_MA_5_1_Dual_Audio_English_Russian_Director_Cut.mkv"
+    local res_ascii = trunc(long_ascii, 45)
+    assert_eq(#res_ascii, 45, "Long ASCII truncated to exactly 45 characters")
+    assert_true(res_ascii:find("...", 1, true) ~= nil, "Contains ellipsis")
+    assert_true(res_ascii:sub(-4) == ".mkv", "Preserves extension")
+    assert_true(res_ascii:sub(1, 10) == "A_Very_Lon", "Preserves title prefix")
+
+    -- Multi-byte UTF-8 Russian filename
+    local long_ru = "Внутренняя_империя_[torrents.ru]_by_Scarabey_очень_длинное_название_фильма.avi"
+    local res_ru = trunc(long_ru, 45)
+    assert_true(res_ru:find("...", 1, true) ~= nil, "Contains ellipsis in Russian filename")
+    assert_true(res_ru:sub(-4) == ".avi", "Preserves .avi extension in Russian filename")
+
+    -- Verify UTF-8 character count (not byte length) equals 45
+    local char_count = 0
+    for _ in res_ru:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+        char_count = char_count + 1
+    end
+    assert_eq(char_count, 45, "Russian filename truncated to exactly 45 UTF-8 characters")
 end)
 
 test("app:set_status scrollable & copyable status_box rich HTML formatting", function()
@@ -585,6 +656,47 @@ test("app:on_edit_selected and app:on_save_scene dual-mode workflow", function()
     assert_eq(title_val, "", "Inputs cleared when edit mode cancelled")
 
     os.remove(tmp_scn)
+end)
+
+test("app:on_save_scene validates timestamps against active media duration", function()
+    local app = T.app
+    local repo = SceneRepository.new()
+    app.repo = repo
+    local last_status = ""
+    app.status_box = {
+        set_text = function(self, t) last_status = t end
+    }
+    local tmp_scn = os.tmpname() .. ".scn"
+    app.path_input = {
+        get_text = function() return tmp_scn end
+    }
+
+    local s_val = "00:01:00,000"
+    local e_val = "00:06:00,000" -- exceeds 300s (00:05:00,000)
+    local t_val = "Too Long Scene"
+
+    app.start_input = { get_text = function() return s_val end, set_text = function(self, v) s_val = v end }
+    app.end_input   = { get_text = function() return e_val end, set_text = function(self, v) e_val = v end }
+    app.title_input = { get_text = function() return t_val end, set_text = function(self, v) t_val = v end }
+
+    app:on_save_scene()
+    assert_eq(repo:count(), 0, "Scene exceeding duration not saved")
+    assert_true(last_status:find("exceeds media duration", 1, true) ~= nil, "Status reports end exceeds media duration")
+
+    -- Start exceeds duration
+    s_val = "00:05:30,000"
+    e_val = "00:06:00,000"
+    app:on_save_scene()
+    assert_eq(repo:count(), 0, "Scene with start past duration not saved")
+    assert_true(last_status:find("cannot be at or beyond media duration", 1, true) ~= nil, "Status reports start exceeds media duration")
+
+    -- Valid boundary: end == 00:05:00,000
+    s_val = "00:04:00,000"
+    e_val = "00:05:00,000"
+    app:on_save_scene()
+    assert_eq(repo:count(), 1, "Valid boundary scene saved successfully")
+    assert_true(last_status:find("Added", 1, true) ~= nil or last_status:find("✅", 1, true) ~= nil, "Scene added status")
+    pcall(os.remove, tmp_scn)
 end)
 
 test("SceneRepository:delete_many deletes multiple scenes atomically and reindexes", function()
@@ -1139,6 +1251,12 @@ test("activate() initializes 12-column grid layout correctly", function()
     assert_true(T.app.dlg ~= nil, "Dialog was created")
     assert_eq(#widgets, 22, "All 22 widgets registered in grid")
 
+    -- Primary default button: widgets[1] must be Add/Save Scene button so Qt handles Enter key
+    assert_eq(widgets[1].type, "button", "First registered widget is a button")
+    assert_eq(widgets[1].row, 16, "First registered button is placed at row 16")
+    assert_eq(widgets[1].col, 9, "First registered button is placed at col 9")
+    assert_eq(widgets[1].col_span, 4, "First registered button spans 4 cols")
+
     -- Verify all rows respect 12 columns
     for _, w in ipairs(widgets) do
         assert_true(w.col + w.col_span - 1 <= 12, string.format("Widget %s at row %d fits in 12 columns", w.type, w.row))
@@ -1226,6 +1344,72 @@ test("activate() initializes 12-column grid layout correctly", function()
     _G.vlc.dialog = orig_dialog
 end)
 
+test("Enter key routing: default dialog button invokes on_save_scene()", function()
+    local orig_dialog = _G.vlc.dialog
+    local default_btn_cb = nil
+    local add_save_caption = nil
+
+    _G.vlc.dialog = function(title)
+        local btn_count = 0
+        return {
+            title = title,
+            add_button = function(self, text, fn, col, row, col_span, row_span)
+                btn_count = btn_count + 1
+                if btn_count == 1 then
+                    default_btn_cb = fn
+                    add_save_caption = text
+                end
+                return {}
+            end,
+            add_label = function() return { set_text = function() end } end,
+            add_text_input = function(self, text)
+                local val = text or ""
+                return {
+                    get_text = function() return val end,
+                    set_text = function(self, t) val = t end
+                }
+            end,
+            add_list = function()
+                return { clear = function() end, add_value = function() end, get_selection = function() return {} end }
+            end,
+            add_html = function()
+                return { get_text = function() return "" end, set_text = function() end }
+            end,
+            delete = function() end
+        }
+    end
+
+    T.app.dlg = nil
+    T.activate()
+
+    assert_true(default_btn_cb ~= nil, "Default button callback captured")
+    assert_true(add_save_caption ~= nil, "Default button caption present")
+
+    -- Setup a valid scene in inputs
+    local tmp_scn = Platform.script_ext() == ".bat" and (os.getenv("TEMP") or ".") .. "\\test_enter.scn" or "/tmp/test_enter.scn"
+    pcall(os.remove, tmp_scn)
+    T.app.path_input:set_text(tmp_scn)
+    T.app.loaded_scn_path = tmp_scn
+    T.app.repo:clear()
+
+    T.app.start_input:set_text("00:00:10,000")
+    T.app.end_input:set_text("00:00:20,000")
+    T.app.title_input:set_text("Scene Added via Enter Key")
+
+    -- Simulate pressing Enter (which in Qt QDialog activates the default button)
+    default_btn_cb()
+
+    assert_eq(T.app.repo:count(), 1, "Scene saved to repository via default button callback")
+    local scn = T.app.repo:get_by_id(1)
+    assert_eq(scn.title, "Scene Added via Enter Key", "Scene title matches entered title")
+    assert_eq(T.app.title_input:get_text(), "", "Title input cleared after save")
+
+    -- Clean up
+    pcall(os.remove, tmp_scn)
+    T.app.dlg = nil
+    _G.vlc.dialog = orig_dialog
+end)
+
 test("Modular architecture: direct require of src/ modules", function()
     local orig_path = package.path
     package.path = "src/?.lua;src/?/init.lua;" .. package.path
@@ -1299,6 +1483,7 @@ test("Build micro-bundler supports locale module injection (ru)", function()
 
     local desc = env.descriptor and env.descriptor() or _G.descriptor()
     assert_true(desc ~= nil and desc.title == "ReelMaker v1.2", "Descriptor title in Russian bundle is ReelMaker v1.2")
+    assert_true(desc ~= nil and desc.shortdesc == "ReelMaker v1.2", "Descriptor shortdesc in Russian bundle is ReelMaker v1.2")
     assert_true(desc ~= nil and desc.version == "1.2", "Descriptor version in Russian bundle is 1.2")
 
     local m = env.menu and env.menu() or _G.menu()

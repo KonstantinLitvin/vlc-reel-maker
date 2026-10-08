@@ -87,8 +87,9 @@ end
 -- @param start_tc TimeCode
 -- @param end_tc TimeCode
 -- @param title string
-function SceneRepository:add(start_tc, end_tc, title)
-    local sc, err = Scene.new(#self.scenes + 1, start_tc, end_tc, title)
+-- @param max_duration TimeCode|number Optional duration ceiling
+function SceneRepository:add(start_tc, end_tc, title, max_duration)
+    local sc, err = Scene.new(#self.scenes + 1, start_tc, end_tc, title, max_duration)
     if not sc then
         return false, err
     end
@@ -190,15 +191,17 @@ end
 -- @param start_tc TimeCode
 -- @param end_tc TimeCode
 -- @param title string
+-- @param max_duration TimeCode|number Optional duration ceiling
 -- @return boolean, Scene|string ok, updated_scene_or_error
-function SceneRepository:update(id, start_tc, end_tc, title)
+function SceneRepository:update(id, start_tc, end_tc, title, max_duration)
     local sc = self:get_by_id(id)
     if not sc then
         return false, "Scene not found for ID: " .. tostring(id)
     end
 
-    if end_tc <= start_tc then
-        return false, "End time must be greater than Start time"
+    local valid, err = Scene.new(id, start_tc, end_tc, title or sc.title, max_duration)
+    if not valid then
+        return false, err
     end
 
     sc.start_tc = start_tc

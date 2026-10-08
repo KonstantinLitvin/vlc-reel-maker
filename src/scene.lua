@@ -12,12 +12,27 @@ Scene.__index = Scene
 -- @param start_tc TimeCode Start timecode
 -- @param end_tc TimeCode End timecode
 -- @param title string Scene title
-function Scene.new(id, start_tc, end_tc, title)
+-- @param max_duration TimeCode|number Optional media duration ceiling
+function Scene.new(id, start_tc, end_tc, title, max_duration)
     if not (start_tc and end_tc) then
         return nil, "Start and End timecodes are required"
     end
     if end_tc <= start_tc then
         return nil, "End timestamp must be strictly greater than start timestamp"
+    end
+
+    if max_duration then
+        local max_tc = type(max_duration) == "number" and TimeCode.from_seconds(max_duration) or max_duration
+        if max_tc then
+            if start_tc >= max_tc then
+                return nil, string.format("Start timestamp (%s) cannot be greater than or equal to media duration (%s)",
+                    start_tc:to_string(true, ","), max_tc:to_string(true, ","))
+            end
+            if end_tc > max_tc then
+                return nil, string.format("End timestamp (%s) exceeds media duration (%s)",
+                    end_tc:to_string(true, ","), max_tc:to_string(true, ","))
+            end
+        end
     end
 
     local self = setmetatable({}, Scene)
