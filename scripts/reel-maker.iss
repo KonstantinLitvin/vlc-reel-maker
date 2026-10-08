@@ -4,7 +4,7 @@
 #define MyAppName "ReelMaker"
 #define MyAppVersion "1.2"
 #define MyAppPublisher "Konstantin Litvin"
-#define MyAppURL "https://github.com/KonstantinLitvin/reel-maker"
+#define MyAppURL "https://github.com/KonstantinLitvin/vlc-reel-maker"
 #define MyAppExeName "reel-maker.lua"
 
 [Setup]
