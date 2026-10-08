@@ -125,3 +125,7 @@ winget install Gyan.FFmpeg
 ```bash
 luajit tests/test_reel_maker.lua
 ```
+
+## Лицензия
+
+Лицензия MIT. Copyright (c) 2026 Konstantin Litvin. См. [LICENSE](LICENSE).

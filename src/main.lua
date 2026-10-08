@@ -20,7 +20,7 @@ function descriptor()
     return {
         title        = name,
         version      = Version,
-        author       = "Konstantin Litvin & Antigravity",
+        author       = "Konstantin Litvin",
         shortdesc    = name,
         description  = L.ext_desc,
         capabilities = { "menu" }

@@ -124,3 +124,7 @@ Run the test suite without the VLC graphical interface using LuaJIT:
 ```bash
 luajit tests/test_reel_maker.lua
 ```
+
+## License
+
+MIT License. Copyright (c) 2026 Konstantin Litvin. See [LICENSE](LICENSE).
