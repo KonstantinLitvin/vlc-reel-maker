@@ -45,4 +45,5 @@ luac.out
 # IDEs
 .idea/
 .vscode/
+.build/
 md

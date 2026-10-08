@@ -49,7 +49,18 @@
 - **Обычный (deb/rpm) VLC**: `~/.local/share/vlc/lua/extensions/`
 
 #### Windows
-Скопируйте `dist/reel-maker.lua` в:
+Запустите автоматический установщик в один клик:
+```cmd
+scripts\install-windows.bat
+```
+*(Предлагает выбор языка: русский или английский, устанавливает бандл в `%APPDATA%\vlc\lua\extensions\` и проверяет наличие FFmpeg).*
+
+Либо скомпилируйте установочный мастер `.exe` через Inno Setup 6:
+```cmd
+iscc scripts\reel-maker.iss
+```
+
+Либо скопируйте `dist/reel-maker.lua` вручную в:
 ```
 %APPDATA%\vlc\lua\extensions\reel-maker.lua
 ```

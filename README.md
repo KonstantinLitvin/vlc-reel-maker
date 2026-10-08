@@ -47,7 +47,18 @@ Or manually copy `dist/reel-maker.lua` to:
 - **Native VLC**: `~/.local/share/vlc/lua/extensions/`
 
 #### Windows
-Copy `dist/reel-maker.lua` to:
+Run the automated one-click installer:
+```cmd
+scripts\install-windows.bat
+```
+*(Prompts for language: English or Russian, installs the bundle into `%APPDATA%\vlc\lua\extensions\`, and checks FFmpeg).*
+
+Or compile the native GUI wizard using Inno Setup 6:
+```cmd
+iscc scripts\reel-maker.iss
+```
+
+Or manually copy `dist/reel-maker.lua` to:
 ```
 %APPDATA%\vlc\lua\extensions\reel-maker.lua
 ```
