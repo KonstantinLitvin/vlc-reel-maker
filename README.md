@@ -4,6 +4,8 @@
 
 # ReelMaker
 
+[English](README.md) | [Русский](README.ru.md)
+
 A modern, high-precision VLC media player extension written in Lua for media fragment capture, highlight reel navigation, `.scn` file persistence, and lossless FFmpeg cutting.
 
 ---
@@ -20,51 +22,6 @@ A modern, high-precision VLC media player extension written in Lua for media fra
   - **Export Cut Script**: Generates a self-contained batch script (`.sh` for Linux or `.bat` for Windows) next to your media for one-click processing.
 - **🌐 Dual-Language Localization**: Full build-stage localization for English and Russian (`ru`), including localized table headers with `№` notation.
 - **💻 Cross-Platform Compatibility**: Full support for Linux (POSIX shell, Snap confinement) and Windows (`cmd.exe` batch files, `start /B` background tasks).
-
----
-
-## Architecture & Design
-
-The codebase adheres to Clean Architecture and Object-Oriented Domain-Driven Design principles, separating value objects, domain entities, persistence repositories, platform abstractions, localization catalogs, and UI presentation.
-
-Detailed documentation, component responsibilities, and class diagrams can be found in:
-👉 **[Architecture & Design Documentation](md/architecture.md)**
-
----
-
-## File Structure
-
-```
-reel-maker/
-├── assets/
-│   └── logo.png                    # High-resolution application icon
-├── dist/
-│   └── reel-maker.lua              # Compiled self-contained bundle for VLC
-├── src/
-│   ├── version.lua                 # Single source of truth for versioning
-│   ├── locale.lua                  # Fallback localization loader
-│   ├── locales/
-│   │   ├── en.lua                  # English translation catalog
-│   │   └── ru.lua                  # Russian translation catalog
-│   ├── timecode.lua                # Value Object: TimeCode
-│   ├── scene.lua                   # Entity: Scene
-│   ├── platform.lua                # Host OS shell quoting, ensure_dir, list_scn_files
-│   ├── cutter_service.lua          # FFmpeg discovery, command generator, and cut execution
-│   ├── scene_repository.lua        # SCN parser, collection manager, and serializer
-│   ├── vlc_player_adapter.lua      # VLC C-API bridge
-│   ├── app_controller.lua          # State machine, action handlers, status formatting
-│   └── main.lua                    # Descriptor, VLC lifecycle hooks, 12-col dialog
-├── tests/
-│   └── test_reel_maker.lua         # Standalone headless test suite (47 tests)
-├── scripts/
-│   ├── build.sh / build.lua        # Micro-bundler compiling src/ into dist/reel-maker.lua
-│   ├── install.sh                  # Builds and installs bundle to Snap & Native VLC
-│   ├── get-ffmpeg.sh               # Downloads static FFmpeg for Snap VLC
-│   └── install-ffmpeg-windows.bat  # Automated Windows FFmpeg installer
-├── md/
-│   └── architecture.md             # Architecture specification and class diagrams
-└── README.md                       # Project documentation
-```
 
 ---
 
