@@ -144,7 +144,7 @@ function app:set_status(msg, level)
         self.status_box:set_text(html)
     end
     if vlc and vlc.msg then
-        vlc.msg.dbg("[MediaCutter] " .. msg:gsub("<[^>]+>", ""))
+        vlc.msg.dbg("[ReelMaker] " .. msg:gsub("<[^>]+>", ""))
     end
 end
 

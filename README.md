@@ -1,26 +1,31 @@
-# VLC Scene Marker
+<p align="center">
+  <img src="assets/logo.png" width="180" alt="ReelMaker Logo" />
+</p>
 
-A modern, VLC media player extension written in Lua for video fragment capture, scene navigation, `.scn` file persistence, and FFmpeg video cutting.
+# ReelMaker
+
+A modern, high-precision VLC media player extension written in Lua for media fragment capture, highlight reel navigation, `.scn` file persistence, and lossless FFmpeg cutting.
 
 ---
 
 ## Features
 
-- **⏱️ Mark In & Mark Out**: Capture current playback timestamps with millisecond accuracy directly from playing media.
-- **💾 Automatic `.scn` Persistence**: Auto-guesses the `.scn` file location based on video file path, parses subtitle-like scene blocks, and saves updates.
-- **🔄 Auto-Sorting & Reindexing**: Newly captured scenes are sorted chronologically and assigned sequential IDs (1..N).
+- **⏱️ Mark In & Mark Out**: Capture current playback timestamps with millisecond accuracy directly from playing video or audio media.
+- **💾 Automatic `.scn` Persistence**: Auto-guesses the `.scn` file location based on media file path, parses subtitle-like scene blocks, and saves updates.
+- **🔄 Auto-Sorting & Reindexing**: Newly captured scenes are sorted chronologically and assigned sequential IDs (`№ 1..N`).
 - **✏️ In-Place Scene Editing**: Select any scene and click **Edit** to populate Start, End, and Title fields, adjust boundaries or text, and update via the dual-mode **Add / Save Scene** button.
 - **▶ Non-Blocking Navigation**: Jump to scene Start or End timestamps instantly without VLC interface thread locks.
-- **✂️ FFmpeg Video Cutting**:
+- **✂️ FFmpeg Media Cutting**:
   - **Cut Selected Scene**: Executes an ultra-fast, lossless stream copy (`-c copy`) with verified exit status, output file validation, and error log diagnostics.
-  - **Export Cut Script**: Generates a self-contained batch script (`.sh` for Linux or `.bat` for Windows) next to your video for one-click processing.
-- **🌐 Cross-Platform Compatibility**: Full support for Linux (POSIX shell, Snap confinement) and Windows (`cmd.exe` batch files, `start /B` background tasks).
+  - **Export Cut Script**: Generates a self-contained batch script (`.sh` for Linux or `.bat` for Windows) next to your media for one-click processing.
+- **🌐 Dual-Language Localization**: Full build-stage localization for English and Russian (`ru`), including localized table headers with `№` notation.
+- **💻 Cross-Platform Compatibility**: Full support for Linux (POSIX shell, Snap confinement) and Windows (`cmd.exe` batch files, `start /B` background tasks).
 
 ---
 
 ## Architecture & Design
 
-The codebase adheres to Clean Architecture and Object-Oriented Domain-Driven Design principles, separating value objects, domain entities, persistence repositories, platform abstractions, and UI presentation.
+The codebase adheres to Clean Architecture and Object-Oriented Domain-Driven Design principles, separating value objects, domain entities, persistence repositories, platform abstractions, localization catalogs, and UI presentation.
 
 Detailed documentation, component responsibilities, and class diagrams can be found in:
 👉 **[Architecture & Design Documentation](md/architecture.md)**
@@ -30,10 +35,17 @@ Detailed documentation, component responsibilities, and class diagrams can be fo
 ## File Structure
 
 ```
-scene-maker/
+reel-maker/
+├── assets/
+│   └── logo.png                    # High-resolution application icon
 ├── dist/
-│   └── scene-marker.lua            # Compiled self-contained bundle for VLC
+│   └── reel-maker.lua              # Compiled self-contained bundle for VLC
 ├── src/
+│   ├── version.lua                 # Single source of truth for versioning
+│   ├── locale.lua                  # Fallback localization loader
+│   ├── locales/
+│   │   ├── en.lua                  # English translation catalog
+│   │   └── ru.lua                  # Russian translation catalog
 │   ├── timecode.lua                # Value Object: TimeCode
 │   ├── scene.lua                   # Entity: Scene
 │   ├── platform.lua                # Host OS shell quoting, ensure_dir, list_scn_files
@@ -43,9 +55,9 @@ scene-maker/
 │   ├── app_controller.lua          # State machine, action handlers, status formatting
 │   └── main.lua                    # Descriptor, VLC lifecycle hooks, 12-col dialog
 ├── tests/
-│   └── test_scene_marker.lua       # Standalone headless test suite (45 tests)
+│   └── test_reel_maker.lua         # Standalone headless test suite (47 tests)
 ├── scripts/
-│   ├── build.sh / build.lua        # Micro-bundler compiling src/ into dist/scene-marker.lua
+│   ├── build.sh / build.lua        # Micro-bundler compiling src/ into dist/reel-maker.lua
 │   ├── install.sh                  # Builds and installs bundle to Snap & Native VLC
 │   ├── get-ffmpeg.sh               # Downloads static FFmpeg for Snap VLC
 │   └── install-ffmpeg-windows.bat  # Automated Windows FFmpeg installer
@@ -59,34 +71,36 @@ scene-maker/
 ## Installation & Build
 
 ### 1. Build Bundle
-The source code is organized into modular Lua components under `src/`. To compile them into `dist/scene-marker.lua`:
+The source code is organized into modular Lua components under `src/`. To compile them into `dist/reel-maker.lua`:
 ```bash
-./scripts/build.sh
+./scripts/build.sh          # Default: English
+./scripts/build.sh ru       # Russian build
 ```
 
 ### 2. Extension Installation
 
 #### Linux
-Run the installation script (which automatically builds and installs `dist/scene-marker.lua`):
+Run the installation script (which automatically builds and installs `dist/reel-maker.lua`):
 ```bash
-./scripts/install.sh
+./scripts/install.sh        # Install default English build
+./scripts/install.sh ru     # Install Russian build
 ```
-Or manually copy `dist/scene-marker.lua` to:
+Or manually copy `dist/reel-maker.lua` to:
 - **Snap VLC**: `~/snap/vlc/current/.local/share/vlc/lua/extensions/`
 - **Native VLC**: `~/.local/share/vlc/lua/extensions/`
 
 #### Windows
-Copy `dist/scene-marker.lua` to:
+Copy `dist/reel-maker.lua` to:
 ```
-%APPDATA%\vlc\lua\extensions\scene-marker.lua
+%APPDATA%\vlc\lua\extensions\reel-maker.lua
 ```
 
 ---
 
-### 2. FFmpeg Setup (For Direct In-App Cutting)
+### 3. FFmpeg Setup (For Direct In-App Cutting)
 
-The extension provides two ways to cut videos:
-1. **Export Cut Script (`[ 📄 Export Cut Script ]`)**: Requires no setup inside VLC. Writes a batch script (`.sh` or `.bat`) next to your video that runs on your host machine.
+The extension provides two ways to cut media:
+1. **Export Cut Script (`[ 📄 Export Cut Script ]`)**: Requires no setup inside VLC. Writes a batch script (`.sh` or `.bat`) next to your video/audio file that runs on your host machine.
 2. **Direct In-App Cutting (`[ ✂️ Cut Selected Scene ]`)**: Requires FFmpeg to be accessible to VLC.
 
 #### Linux (VLC Snap)
@@ -115,14 +129,14 @@ or place `ffmpeg.exe` into `%APPDATA%\vlc\bin\`.
 
 ## Usage
 
-1. Open VLC Media Player and start playing a video.
-2. In the menu bar, open: **View** -> **Scene Marker** (or right-click the video canvas and choose **Scene Marker** actions from the menu).
+1. Open VLC Media Player and start playing a media file (video or audio).
+2. In the menu bar, open: **View** -> **ReelMaker v1.2** (or **Вид** -> **ReelMaker v1.2**).
 3. **Working Directory & File Path**:
-   - **Work Dir**: Auto-detected from playing video directory. Specify a custom folder to save cut clips and exported scripts elsewhere.
+   - **Work Dir**: Auto-detected from playing media directory. Specify a custom folder to save cut clips and exported scripts elsewhere.
    - **.scn File**: Auto-detected `.scn` path. If an `.scn` file already exists, it is loaded automatically.
 4. **Marking a Fragment**:
-   - Click `[ ⏱️ Mark Start (In) ]` at the fragment start.
-   - Click `[ ⏱️ Mark End (Out) ]` at the fragment end.
+   - Click `[ ⏱️ Mark Start ]` at the fragment start.
+   - Click `[ ⏱️ Mark End ]` at the fragment end.
    - Enter a title (or leave blank for auto-generated `Scene N`).
    - Click `[ ➕ Add / Save Scene ]`.
 5. **Managing Selected Scenes**:
@@ -142,5 +156,5 @@ or place `ffmpeg.exe` into `%APPDATA%\vlc\bin\`.
 The test suite runs headlessly using `luajit` or standard `lua5.1` / `lua5.2`:
 
 ```bash
-luajit tests/test_scene_marker.lua
+luajit tests/test_reel_maker.lua
 ```

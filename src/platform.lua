@@ -29,11 +29,11 @@ function Platform.bg_command(cmd, log_path, is_win)
     if is_win == nil then is_win = Platform.is_windows end
     if is_win then
         -- Windows: start /B runs process in background without opening a new console window
-        local log = log_path or "%TEMP%\\scene_marker_cut.log"
+        local log = log_path or "%TEMP%\\reel_maker_cut.log"
         return string.format('start "" /B cmd /c "%s > %s 2>&1"', cmd, log)
     else
         -- POSIX: trailing & detaches process to prevent freezing VLC UI thread
-        local log = log_path or "/tmp/scene_marker_cut.log"
+        local log = log_path or "/tmp/reel_maker_cut.log"
         return string.format("%s > %s 2>&1 &", cmd, Platform.quote(log, false))
     end
 end

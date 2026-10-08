@@ -3,9 +3,9 @@
 --------------------------------------------------
 return {
     -- Extension descriptor
-    ext_title                    = "MediaCutter",
-    ext_shortdesc                = "Fragment capture, scene navigation & cutting",
-    ext_desc                     = "Mark fragment start and end timestamps, export/cut via FFmpeg, save directly to .scn files, and navigate scenes.",
+    ext_title                    = "ReelMaker",
+    ext_shortdesc                = "Fragment capture, reel navigation & cutting",
+    ext_desc                     = "Mark fragment start and end timestamps, export/cut via FFmpeg, save directly to .scn files, and navigate reels.",
 
     -- Menu items
     menu_mark_start              = "⏱️ Mark Start",

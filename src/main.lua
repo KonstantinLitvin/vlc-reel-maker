@@ -9,6 +9,7 @@ local SceneRepository = require("scene_repository")
 local VlcPlayerAdapter = require("vlc_player_adapter")
 local ui = require("app_controller")
 local L = require("locale")
+local Version = require("version")
 
 local app = ui.app
 local wrap_status_text = ui.wrap_status_text
@@ -16,8 +17,8 @@ local html_escape = ui.html_escape
 
 function descriptor()
     return {
-        title        = L.ext_title,
-        version      = "1.2",
+        title        = string.format("%s v%s", L.ext_title, Version),
+        version      = Version,
         author       = "Konstantin Litvin & Antigravity",
         shortdesc    = L.ext_shortdesc,
         description  = L.ext_desc,
@@ -31,7 +32,7 @@ function activate()
     if not app.repo then
         app.repo = SceneRepository.new()
     end
-    app.dlg = vlc.dialog(L.ext_title)
+    app.dlg = vlc.dialog(string.format("%s v%s", L.ext_title, Version))
 
     -- Row 1: Active Media Banner (Label, full width)
     app.media_box = app.dlg:add_label("", 1, 1, 12, 1)

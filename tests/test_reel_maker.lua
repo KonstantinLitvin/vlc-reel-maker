@@ -1,4 +1,4 @@
--- Unit test suite for scene-marker.lua
+-- Unit test suite for ReelMaker
 _G.__TEST__ = true
 
 -- Mock VLC runtime environment for headless testing
@@ -80,20 +80,20 @@ _G.vlc = {
 
 -- Build a hermetic English test bundle so test assertions remain reproducible
 -- regardless of local distribution build locale.
-local test_bundle = "dist/scene-marker-test.lua"
+local test_bundle = "dist/reel-maker-test.lua"
 local build_cmd = "luajit scripts/build.lua en " .. test_bundle .. " 2>/dev/null || luajit ../scripts/build.lua en " .. test_bundle .. " 2>/dev/null"
 os.execute(build_cmd)
 local chunk, load_err = loadfile(test_bundle) or loadfile("../" .. test_bundle)
 if not chunk then
     -- Fallback to default dist
-    local script_path = "dist/scene-marker.lua"
+    local script_path = "dist/reel-maker.lua"
     chunk, load_err = loadfile(script_path) or loadfile("../" .. script_path)
 end
 assert(chunk, "Failed to load test bundle: " .. tostring(load_err))
 chunk()
 
 local T = _G.__TEST_CLASSES__
-assert(T, "Test classes hook not exported from scene-marker.lua")
+assert(T, "Test classes hook not exported from ReelMaker bundle")
 
 local TimeCode        = T.TimeCode
 local Scene           = T.Scene
@@ -130,7 +130,7 @@ local function assert_true(cond, msg)
 end
 
 print("--------------------------------------------------")
-print("Running Scene Marker Test Suite (Unit & System)")
+print("Running ReelMaker Test Suite (Unit & System)")
 print("--------------------------------------------------")
 
 -- 1. TimeCode tests
@@ -272,7 +272,8 @@ end)
 
 test("Extension descriptor and menu() hooks", function()
     local desc = descriptor()
-    assert_eq(desc.title, "MediaCutter", "Descriptor title matches")
+    assert_eq(desc.title, "ReelMaker v1.2", "Descriptor title matches")
+    assert_eq(desc.version, "1.2", "Descriptor version matches")
     assert_eq(desc.capabilities[1], "menu", "Menu capability declared")
 
     local m = menu()
@@ -939,7 +940,7 @@ end)
 
 -- 41. Platform directory management & discovery tests
 test("Platform.dir_exists and Platform.ensure_dir", function()
-    local test_dir = "/tmp/test_scene_marker_dir_" .. os.time()
+    local test_dir = "/tmp/test_reel_maker_dir_" .. os.time()
     os.execute("rm -rf " .. Platform.quote(test_dir, false))
 
     assert_true(not Platform.dir_exists(test_dir, false), "New dir does not exist yet")
@@ -1277,7 +1278,7 @@ test("Locale catalog parity: en.lua and ru.lua have matching keys", function()
 end)
 
 test("Build micro-bundler supports locale module injection (ru)", function()
-    local test_out = "dist/scene-marker-ru-test.lua"
+    local test_out = "dist/reel-maker-ru-test.lua"
     local exit_code = os.execute("luajit scripts/build.lua ru " .. test_out .. " >/dev/null 2>&1")
     assert_true(exit_code == 0 or exit_code == true, "scripts/build.lua ru exits cleanly")
 
@@ -1297,7 +1298,8 @@ test("Build micro-bundler supports locale module injection (ru)", function()
     ru_chunk()
 
     local desc = env.descriptor and env.descriptor() or _G.descriptor()
-    assert_true(desc ~= nil and desc.title == "MediaCutter", "Descriptor title in Russian bundle is MediaCutter")
+    assert_true(desc ~= nil and desc.title == "ReelMaker v1.2", "Descriptor title in Russian bundle is ReelMaker v1.2")
+    assert_true(desc ~= nil and desc.version == "1.2", "Descriptor version in Russian bundle is 1.2")
 
     local m = env.menu and env.menu() or _G.menu()
     assert_true(m ~= nil and m[1]:find("Отметить начало", 1, true) ~= nil, "Menu in Russian bundle is localized")

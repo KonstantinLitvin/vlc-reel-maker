@@ -1,11 +1,11 @@
 @echo off
 setlocal
 
-REM Windows FFmpeg installer / setup for VLC Scene Marker
+REM Windows FFmpeg installer / setup for VLC ReelMaker
 REM Checks for existing ffmpeg, attempts winget install, or downloads to %APPDATA%\vlc\bin
 
 echo ==================================================
-echo Checking FFmpeg for VLC Scene Marker (Windows)
+echo Checking FFmpeg for VLC ReelMaker (Windows)
 echo ==================================================
 
 REM Check if ffmpeg is in PATH
@@ -64,7 +64,7 @@ if exist "%APPDATA%\vlc\bin\ffmpeg.exe" (
 
 :done
 echo ==================================================
-echo Setup complete. Restart VLC and open View -> Scene Marker.
+echo Setup complete. Restart VLC and open View -> ReelMaker.
 echo ==================================================
 pause
 endlocal
