@@ -1113,6 +1113,11 @@ test("app:update_media_display and app:on_set_scn_file workflow", function()
         get_selection = function() return {} end
     }
 
+    T.app.workdir_input = {
+        get_text = function() return test_dir end,
+        set_text = function() end
+    }
+
     -- 2. Test on_set_scn_file with an existing file
     local existing_scn = test_dir .. "/existing.scn"
     local f = io.open(existing_scn, "w")
@@ -1156,6 +1161,7 @@ test("app:update_media_display and app:on_set_scn_file workflow", function()
     os.execute("rm -rf " .. Platform.quote(test_dir, false))
     T.app.media_box = nil
     T.app.path_input = nil
+    T.app.workdir_input = nil
     T.app.list = nil
 end)
 
@@ -1493,6 +1499,95 @@ test("Build micro-bundler supports locale module injection (ru)", function()
     assert_true(L_ru ~= nil and L_ru.table_header:find("№", 1, true) ~= nil, "Table header in Russian bundle uses №")
 
     os.remove(test_out)
+end)
+
+test("CutterService.generate_script prevents command injection in Bash and Windows", function()
+    local repo = SceneRepository.new()
+    -- Malicious Bash command injection title
+    repo:add(TimeCode.from_seconds(10), TimeCode.from_seconds(20), "$(printf INJECTED)")
+    -- Dangerous Windows command injection title
+    repo:add(TimeCode.from_seconds(30), TimeCode.from_seconds(40), "Action & calc.exe & Ending")
+    -- Special characters: quotes, percent, pipes, redirection, carets
+    repo:add(TimeCode.from_seconds(50), TimeCode.from_seconds(60), '100% "sale" <tag> | test ^ foo')
+
+    -- 1. Test Bash script generation
+    local bash_script = CutterService.generate_script("/media/movie.mp4", repo.scenes, false, "/media")
+    -- In Bash, status message must be wrapped in single quotes so $(...) is NEVER evaluated
+    assert_true(bash_script:find("echo 'Cutting Scene 1: $(printf INJECTED)...'", 1, true) ~= nil, "Bash command substitution safely quoted in single quotes")
+    assert_true(bash_script:find('echo "Cutting Scene 1:', 1, true) == nil, "No unescaped double-quoted echo in Bash")
+
+    -- 2. Test Windows Batch script generation
+    local win_script = CutterService.generate_script("C:\\media\\movie.mp4", repo.scenes, true, "C:\\media")
+    -- In Windows, & must be escaped with ^& so cmd.exe does NOT execute calc.exe
+    assert_true(win_script:find("echo Cutting Scene 2: Action ^& calc.exe ^& Ending...", 1, true) ~= nil, "Windows ampersands escaped with caret")
+    assert_true(win_script:find("Action & calc.exe", 1, true) == nil, "No unescaped ampersand in batch echo")
+    -- Percent and special symbols escaped
+    assert_true(win_script:find("100%%", 1, true) ~= nil, "Percent escaped as %% in batch echo")
+    assert_true(win_script:find("^<tag^>", 1, true) ~= nil, "Tags escaped with carets in batch echo")
+    assert_true(win_script:find("^|", 1, true) ~= nil, "Pipe escaped with caret in batch echo")
+    assert_true(win_script:find("^^", 1, true) ~= nil, "Caret escaped with caret in batch echo")
+end)
+
+test("External .scn path preservation and save redirection guard", function()
+    local work_dir = "/tmp/reel_review_workdir"
+    local external_dir = "/tmp/reel_review_external_dir"
+    os.execute("mkdir -p " .. Platform.quote(work_dir, false))
+    os.execute("mkdir -p " .. Platform.quote(external_dir, false))
+
+    local external_scn = external_dir .. "/reel_review_external.scn"
+    local f = io.open(external_scn, "w")
+    f:write("1\n00:00:10,000 --> 00:00:20,000\nExternal Scene\n")
+    f:close()
+
+    local workdir_val = work_dir
+    T.app.workdir_input = {
+        get_text = function() return workdir_val end,
+        set_text = function(self, t) workdir_val = t end
+    }
+
+    local path_val = external_scn
+    T.app.path_input = {
+        get_text = function() return path_val end,
+        set_text = function(self, t) path_val = t end
+    }
+
+    T.app:on_set_scn_file()
+
+    -- 1. Verify path_input displays clean bare filename (NOT full path)
+    assert_eq(path_val, "reel_review_external.scn", "path_input displays clean bare filename")
+    -- 2. Verify workdir_input was auto-synchronized to external .scn directory
+    assert_eq(workdir_val, external_dir, "workdir_input auto-synchronized to external .scn directory")
+    assert_eq(T.app.loaded_scn_path, external_scn, "loaded_scn_path points to external file")
+
+    -- 3. Verify subsequent get_scn_path() resolves to the external file, NOT inside old work_dir!
+    local resolved = T.app:get_scn_path()
+    assert_eq(resolved, external_scn, "get_scn_path() resolves to external path")
+    assert_true(resolved ~= work_dir .. "/reel_review_external.scn", "Does not redirect to old working directory")
+
+    -- 3. Add a scene and save via on_save_scene
+    T.app.start_input = { get_text = function() return "00:00:30,000" end, set_text = function() end }
+    T.app.end_input = { get_text = function() return "00:00:40,000" end, set_text = function() end }
+    T.app.title_input = { get_text = function() return "New Scene" end, set_text = function() end }
+    T.app.status_box = { set_text = function() end }
+
+    T.app:on_save_scene()
+
+    -- Verify the external file was updated
+    local repo_check = SceneRepository.new()
+    local ok, res = repo_check:load(external_scn)
+    assert_true(ok, "External file loaded successfully")
+    assert_eq(repo_check:count(), 2, "External file has 2 scenes after save")
+
+    -- Verify workdir was NOT touched / no file was created there
+    local f_workdir = io.open(work_dir .. "/reel_review_external.scn", "r")
+    assert_true(f_workdir == nil, "File in workdir was NOT created or overwritten")
+    if f_workdir then f_workdir:close() end
+
+    -- Cleanup
+    os.execute("rm -rf " .. Platform.quote(work_dir, false))
+    os.execute("rm -rf " .. Platform.quote(external_dir, false))
+    T.app.workdir_input = nil
+    T.app.path_input = nil
 end)
 
 pcall(os.remove, test_bundle)

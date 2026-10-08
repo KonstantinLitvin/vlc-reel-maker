@@ -341,7 +341,17 @@ function app:on_set_scn_file()
     end
 
     local wd = self:get_work_dir() or VlcPlayerAdapter.guess_work_dir()
+    local scn_dir = resolved_path:match("^(.*)[\\/]")
     local basename = resolved_path:match("([^\\/]+)$") or resolved_path
+
+    -- If selected .scn is outside current workdir, auto-sync workdir_input to its parent folder.
+    -- This keeps path_input clean (bare filename) while ensuring subsequent saves and cut scripts target the right directory.
+    if scn_dir and scn_dir ~= "" and wd and scn_dir ~= wd then
+        if self.workdir_input then
+            self.workdir_input:set_text(scn_dir)
+        end
+        wd = scn_dir
+    end
 
     local f = io.open(resolved_path, "r")
     if f then

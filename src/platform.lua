@@ -21,6 +21,24 @@ function Platform.quote(str, is_win)
     end
 end
 
+--- Escape string for Windows cmd.exe echo statement
+-- Prevents command injection and syntax errors from metacharacters (^, %, &, |, <, >)
+-- @param str string Raw text to display via echo
+-- @return string Escaped string safe for cmd.exe echo
+function Platform.escape_batch_echo(str)
+    str = tostring(str or "")
+    -- 1. Caret must be escaped first as ^^
+    str = str:gsub("%^", "^^")
+    -- 2. Percent must be escaped as %% in batch scripts
+    str = str:gsub("%%", "%%%%")
+    -- 3. Shell redirection and command chaining metacharacters
+    str = str:gsub("&", "^&")
+    str = str:gsub("|", "^|")
+    str = str:gsub("<", "^<")
+    str = str:gsub(">", "^>")
+    return str
+end
+
 --- Format non-blocking background command execution
 -- @param cmd string Core command line to run
 -- @param log_path string Log file destination

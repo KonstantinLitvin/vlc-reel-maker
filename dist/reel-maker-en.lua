@@ -376,6 +376,24 @@ function Platform.quote(str, is_win)
     end
 end
 
+--- Escape string for Windows cmd.exe echo statement
+-- Prevents command injection and syntax errors from metacharacters (^, %, &, |, <, >)
+-- @param str string Raw text to display via echo
+-- @return string Escaped string safe for cmd.exe echo
+function Platform.escape_batch_echo(str)
+    str = tostring(str or "")
+    -- 1. Caret must be escaped first as ^^
+    str = str:gsub("%^", "^^")
+    -- 2. Percent must be escaped as %% in batch scripts
+    str = str:gsub("%%", "%%%%")
+    -- 3. Shell redirection and command chaining metacharacters
+    str = str:gsub("&", "^&")
+    str = str:gsub("|", "^|")
+    str = str:gsub("<", "^<")
+    str = str:gsub(">", "^>")
+    return str
+end
+
 --- Format non-blocking background command execution
 -- @param cmd string Core command line to run
 -- @param log_path string Log file destination
@@ -751,7 +769,8 @@ function CutterService.generate_script(video_path, scenes, is_win, work_dir)
 
         for _, sc in ipairs(scenes) do
             local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
-            table.insert(lines, string.format('echo Cutting Scene %d: %s...', sc.id, sc.title))
+            local status_msg = string.format("Cutting Scene %d: %s...", sc.id, sc.title)
+            table.insert(lines, "echo " .. Platform.escape_batch_echo(status_msg))
             table.insert(lines, CutterService.build_cut_command(video_path, sc, out_path, true, "ffmpeg"))
             table.insert(lines, "")
         end
@@ -769,7 +788,8 @@ function CutterService.generate_script(video_path, scenes, is_win, work_dir)
 
         for _, sc in ipairs(scenes) do
             local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
-            table.insert(lines, string.format('echo "Cutting Scene %d: %s..."', sc.id, sc.title))
+            local status_msg = string.format("Cutting Scene %d: %s...", sc.id, sc.title)
+            table.insert(lines, "echo " .. Platform.quote(status_msg, false))
             table.insert(lines, CutterService.build_cut_command(video_path, sc, out_path, false, "ffmpeg"))
             table.insert(lines, "")
         end
@@ -1627,7 +1647,17 @@ function app:on_set_scn_file()
     end
 
     local wd = self:get_work_dir() or VlcPlayerAdapter.guess_work_dir()
+    local scn_dir = resolved_path:match("^(.*)[\\/]")
     local basename = resolved_path:match("([^\\/]+)$") or resolved_path
+
+    -- If selected .scn is outside current workdir, auto-sync workdir_input to its parent folder.
+    -- This keeps path_input clean (bare filename) while ensuring subsequent saves and cut scripts target the right directory.
+    if scn_dir and scn_dir ~= "" and wd and scn_dir ~= wd then
+        if self.workdir_input then
+            self.workdir_input:set_text(scn_dir)
+        end
+        wd = scn_dir
+    end
 
     local f = io.open(resolved_path, "r")
     if f then

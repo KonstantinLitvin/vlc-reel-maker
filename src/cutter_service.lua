@@ -159,7 +159,8 @@ function CutterService.generate_script(video_path, scenes, is_win, work_dir)
 
         for _, sc in ipairs(scenes) do
             local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
-            table.insert(lines, string.format('echo Cutting Scene %d: %s...', sc.id, sc.title))
+            local status_msg = string.format("Cutting Scene %d: %s...", sc.id, sc.title)
+            table.insert(lines, "echo " .. Platform.escape_batch_echo(status_msg))
             table.insert(lines, CutterService.build_cut_command(video_path, sc, out_path, true, "ffmpeg"))
             table.insert(lines, "")
         end
@@ -177,7 +178,8 @@ function CutterService.generate_script(video_path, scenes, is_win, work_dir)
 
         for _, sc in ipairs(scenes) do
             local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
-            table.insert(lines, string.format('echo "Cutting Scene %d: %s..."', sc.id, sc.title))
+            local status_msg = string.format("Cutting Scene %d: %s...", sc.id, sc.title)
+            table.insert(lines, "echo " .. Platform.quote(status_msg, false))
             table.insert(lines, CutterService.build_cut_command(video_path, sc, out_path, false, "ffmpeg"))
             table.insert(lines, "")
         end

@@ -6,29 +6,27 @@
 
 [English](README.md) | [Русский](README.ru.md)
 
-A modern, high-precision VLC media player extension written in Lua for media fragment capture, highlight reel navigation, `.scn` file persistence, and lossless FFmpeg cutting.
+A VLC media player extension for marking audio and video fragments and navigating between them.
+Scene timestamps and titles are saved in `.scn` files. Marked fragments can be cut into separate files with FFmpeg, or exported as a script for customization and later cutting.
 
 ---
 
 ## Features
 
-- **⏱️ Mark In & Mark Out**: Capture current playback timestamps with millisecond accuracy directly from playing video or audio media.
-- **💾 Automatic `.scn` Persistence**: Auto-guesses the `.scn` file location based on media file path, parses subtitle-like scene blocks, and saves updates.
-- **🔄 Auto-Sorting & Reindexing**: Newly captured scenes are sorted chronologically and assigned sequential IDs (`№ 1..N`).
-- **✏️ In-Place Scene Editing**: Select any scene and click **Edit** to populate Start, End, and Title fields, adjust boundaries or text, and update via the dual-mode **Add / Save Scene** button.
-- **▶ Non-Blocking Navigation**: Jump to scene Start or End timestamps instantly without VLC interface thread locks.
-- **✂️ FFmpeg Media Cutting**:
-  - **Cut Selected Scene**: Executes an ultra-fast, lossless stream copy (`-c copy`) with verified exit status, output file validation, and error log diagnostics.
-  - **Export Cut Script**: Generates a self-contained batch script (`.sh` for Linux or `.bat` for Windows) next to your media for one-click processing.
-- **🌐 Dual-Language Localization**: Full build-stage localization for English and Russian (`ru`), including localized table headers with `№` notation.
-- **💻 Cross-Platform Compatibility**: Full support for Linux (POSIX shell, Snap confinement) and Windows (`cmd.exe` batch files, `start /B` background tasks).
+- **⏱️ Mark Start / Mark End**: Capture playback timestamps with millisecond precision while watching or listening.
+- **✏️ Scene Editing**: Select a scene and click **Edit** to change its timestamps or title, then save with **Add / Save Scene** or **Enter**.
+- **✂️ FFmpeg Cutting Without Re-encoding**:
+  - **Cut Selected Scenes**: Save one or more selected fragments as separate files.
+  - **Export Cut Script**: Generate a script (`.sh` for Linux or `.bat` for Windows) for batch cutting.
+- **🌐 Bilingual Interface**: English and Russian (`ru`) builds.
+- **💻 Linux and Windows Support**: Includes FFmpeg setup for VLC Snap on Linux and batch scripts for Windows.
 
 ---
 
-## Installation & Build
+## Build and Installation
 
-### 1. Build Bundle
-The source code is organized into modular Lua components under `src/`. To compile them into `dist/reel-maker.lua`:
+### 1. Build the Extension
+The source code is in `src/`. Build it into a single extension file, `dist/reel-maker.lua`:
 ```bash
 ./scripts/build.sh          # Default: English
 ./scripts/build.sh ru       # Russian build
@@ -47,13 +45,13 @@ Or manually copy `dist/reel-maker.lua` to:
 - **Native VLC**: `~/.local/share/vlc/lua/extensions/`
 
 #### Windows
-Run the automated one-click installer:
+Run the automatic installer:
 ```cmd
 scripts\install-windows.bat
 ```
 *(Prompts for language: English or Russian, installs the bundle into `%APPDATA%\vlc\lua\extensions\`, and checks FFmpeg).*
 
-Or compile the native GUI wizard using Inno Setup 6:
+Or build the installer wizard using Inno Setup 6:
 ```cmd
 iscc scripts\reel-maker.iss
 ```
@@ -68,8 +66,8 @@ Or manually copy `dist/reel-maker.lua` to:
 ### 3. FFmpeg Setup (For Direct In-App Cutting)
 
 The extension provides two ways to cut media:
-1. **Export Cut Script (`[ 📄 Export Cut Script ]`)**: Requires no setup inside VLC. Writes a batch script (`.sh` or `.bat`) next to your video/audio file that runs on your host machine.
-2. **Direct In-App Cutting (`[ ✂️ Cut Selected Scene ]`)**: Requires FFmpeg to be accessible to VLC.
+1. **Export Cut Script (`[ 🎬 Export Cut Script ]`)**: Creates a script (`.sh` or `.bat`) in the working directory for running in a terminal. Exporting does not require FFmpeg inside VLC; running the script requires `ffmpeg` in the terminal’s `PATH`.
+2. **Direct Cutting (`[ ✂️ Cut ]`)**: Requires FFmpeg to be accessible to VLC.
 
 #### Linux (VLC Snap)
 Ubuntu Snap isolates VLC from host binaries in `/usr/bin`. Install the standalone static FFmpeg build into the Snap's shared environment with one command:
@@ -103,25 +101,25 @@ or place `ffmpeg.exe` into `%APPDATA%\vlc\bin\`.
    - **Work Dir**: Auto-detected from playing media directory. Specify a custom folder to save cut clips and exported scripts elsewhere.
    - **.scn File**: Auto-detected `.scn` path. If an `.scn` file already exists, it is loaded automatically.
 4. **Marking a Fragment**:
-   - Click `[ ⏱️ Mark Start ]` at the fragment start.
-   - Click `[ ⏱️ Mark End ]` at the fragment end.
+   - Click `[ ⏱️ Mark ]` beside **Start** at the beginning of the fragment.
+   - Click `[ ⏱️ Mark ]` beside **End** at the end of the fragment.
    - Enter a title (or leave blank for auto-generated `Scene N`).
-   - Click `[ ➕ Add / Save Scene ]`.
+   - Click `[ ➕ Add / Save Scene ]` or press **Enter** in the title field.
 5. **Managing Selected Scenes**:
-   - Select any scene row in the list to enable the action toolbar:
-     - `[ ▶ To Start ]`: Seeks playback to the scene start.
-     - `[ ⏹ To End ]`: Seeks playback to the scene end.
-     - `[ ✏️ Edit ]`: Loads the selected scene into the input fields for in-place editing; click `[ ➕ Add / Save Scene ]` to update or `[ ✏️ Edit ]` again to cancel.
-     - `[ ✂️ Cut ]`: Cuts the selected scene(s) synchronously using FFmpeg into your working directory (supports selecting multiple scenes with Ctrl/Shift for batch cutting with live GUI progress).
-     - `[ 🗑️ Delete ]`: Atomically removes the selected scene(s), reindexes remaining scenes sequentially, and updates the `.scn` file (includes 2-step confirmation prompt when deleting multiple scenes).
+   - Select one or more scenes in the list (Ctrl/Shift for multiple selection):
+     - `[ ⏮️ To Start ]`: Moves playback to the start of a single selected scene.
+     - `[ ⏭️ To End ]`: Moves playback to the end of a single selected scene.
+     - `[ ✏️ Edit ]`: Loads a single selected scene into the input fields. Click `[ ➕ Add / Save Scene ]` or press **Enter** to save; click `[ ✏️ Edit ]` again to cancel.
+     - `[ ✂️ Cut ]`: Cuts the selected scenes without re-encoding and saves them in the working directory. Multiple scenes are processed in sequence with progress messages.
+     - `[ 🗑️ Delete ]`: Deletes selected scenes, renumbers the remaining scenes, and saves the `.scn` file. When deleting multiple scenes, click **Delete** again to confirm.
 6. **Batch Export**:
-   - Click `[ 📄 Export Cut Script ]` to create a `movie_cut_scenes.sh` (or `.bat`) batch script inside your working directory.
+   - Click `[ 🎬 Export Cut Script ]` to create a cut script in the working directory. It includes the selected scenes, or all scenes if none are selected. The filename includes the media name and, when different, the `.scn` name (for example, `movie_highlights_cut_scenes.sh` or `.bat`).
 
 ---
 
 ## Running Tests
 
-The test suite runs headlessly using `luajit` or standard `lua5.1` / `lua5.2`:
+Run the test suite without the VLC graphical interface using LuaJIT:
 
 ```bash
 luajit tests/test_reel_maker.lua
