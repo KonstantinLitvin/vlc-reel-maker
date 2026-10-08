@@ -3,7 +3,7 @@
 
 #define MyAppName "ReelMaker"
 #define MyAppVersion "1.2"
-#define MyAppPublisher "Konstantin Litvin & Antigravity"
+#define MyAppPublisher "Konstantin Litvin"
 #define MyAppURL "https://github.com/KonstantinLitvin/reel-maker"
 #define MyAppExeName "reel-maker.lua"
 
@@ -46,12 +46,20 @@ russian.StatusRestartVLC=Перезапустите VLC Media Player и откр
 Name: "setupffmpeg"; Description: "{cm:TaskFFmpeg}"; GroupDescription: "Tools / Инструменты:"; Flags: checkedonce
 
 [Files]
-; English Bundle
+; English Bundle (language-specific bundle with fallback to default bundle)
+#if FileExists("..\dist\reel-maker-en.lua")
 Source: "..\dist\reel-maker-en.lua"; DestDir: "{app}"; DestName: "reel-maker.lua"; Languages: english; Flags: ignoreversion
-; Russian Bundle
+#elif FileExists("..\dist\reel-maker.lua")
+Source: "..\dist\reel-maker.lua"; DestDir: "{app}"; DestName: "reel-maker.lua"; Languages: english; Flags: ignoreversion
+#endif
+
+; Russian Bundle (language-specific bundle with fallback to default bundle)
+#if FileExists("..\dist\reel-maker-ru.lua")
 Source: "..\dist\reel-maker-ru.lua"; DestDir: "{app}"; DestName: "reel-maker.lua"; Languages: russian; Flags: ignoreversion
-; Fallback Default Bundle if specific language bundle is not built
-Source: "..\dist\reel-maker.lua"; DestDir: "{app}"; DestName: "reel-maker.lua"; Flags: skipifsourcedoesntexist ignoreversion
+#elif FileExists("..\dist\reel-maker.lua")
+Source: "..\dist\reel-maker.lua"; DestDir: "{app}"; DestName: "reel-maker.lua"; Languages: russian; Flags: ignoreversion
+#endif
+
 ; App Icon
 Source: "..\assets\logo.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; FFmpeg installer batch script (for task)
@@ -62,7 +70,7 @@ Source: "install-ffmpeg-windows.bat"; DestDir: "{tmp}"; Flags: deleteafterinstal
 Type: files; Name: "{app}\scene-marker.lua"
 
 [Run]
-Filename: "{cmd}"; Parameters: "/c ""{tmp}\install-ffmpeg-windows.bat"""; Tasks: setupffmpeg; StatusMsg: "Configuring FFmpeg..."; Flags: runhidden waituntilterminated
+Filename: "{cmd}"; Parameters: "/c """"{tmp}\install-ffmpeg-windows.bat"" --silent""""; Tasks: setupffmpeg; StatusMsg: "Configuring FFmpeg..."; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
 Type: files; Name: "{app}\reel-maker.lua"

@@ -4,6 +4,13 @@ setlocal
 REM Windows FFmpeg installer / setup for VLC ReelMaker
 REM Checks for existing ffmpeg, attempts winget install, or downloads to %APPDATA%\vlc\bin
 
+set "NON_INTERACTIVE=0"
+if /i "%~1"=="--silent" set "NON_INTERACTIVE=1"
+if /i "%~1"=="/silent" set "NON_INTERACTIVE=1"
+if /i "%~1"=="-s" set "NON_INTERACTIVE=1"
+if /i "%~1"=="-y" set "NON_INTERACTIVE=1"
+if /i "%~1"=="--non-interactive" set "NON_INTERACTIVE=1"
+
 echo ==================================================
 echo Checking FFmpeg for VLC ReelMaker (Windows)
 echo ==================================================
@@ -66,5 +73,5 @@ if exist "%APPDATA%\vlc\bin\ffmpeg.exe" (
 echo ==================================================
 echo Setup complete. Restart VLC and open View -> ReelMaker.
 echo ==================================================
-pause
+if "%NON_INTERACTIVE%"=="0" pause
 endlocal

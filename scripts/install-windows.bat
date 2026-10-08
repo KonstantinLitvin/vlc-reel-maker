@@ -35,11 +35,12 @@ if /i "%LANG_OPT%"=="ru" goto :set_ru
 if /i "%LANG_OPT%"=="en" goto :set_en
 
 echo Choose language / Выберите язык:
-echo [1] Русский (Russian)
-echo [2] English
+echo [1] English (default)
+echo [2] Русский (Russian)
 echo.
 set /p "CHOICE=Enter choice (1-2, default=1): "
-if "%CHOICE%"=="2" goto :set_en
+if "%CHOICE%"=="2" goto :set_ru
+goto :set_en
 
 :set_ru
 set "SRC_BUNDLE=%ROOT_DIR%dist\reel-maker-ru.lua"
