@@ -24,43 +24,44 @@
 
 ---
 
-## Сборка и установка
+## Установка
 
-### 1. Сборка расширения
-Исходный код организован в `src/`. Для сборки в один файл расширения `dist/reel-maker.lua`:
-```bash
-./scripts/build.sh ru       # Русская сборка
-./scripts/build.sh          # Английская сборка
-```
+Готовые скомпилированные бандлы расширения уже находятся в папке `dist/`.
 
-### 2. Установка в VLC
+### Windows
 
-#### Linux
-Запустите скрипт установки (он автоматически соберет и скопирует расширение):
-```bash
-./scripts/install.sh ru     # Установка русской версии
-./scripts/install.sh        # Установка английской версии
-```
-Либо скопируйте `dist/reel-maker.lua` вручную:
-- **Snap VLC**: `~/snap/vlc/current/.local/share/vlc/lua/extensions/`
-- **Обычный (deb/rpm) VLC**: `~/.local/share/vlc/lua/extensions/`
+#### Вариант 1: Графический установщик (Рекомендуется)
+Скачайте и запустите установочный мастер из [GitHub Releases](https://github.com/KonstantinLitvin/vlc-reel-maker/releases):
+* `ReelMaker-Setup-v1.2.exe`
 
-#### Windows
-Запустите автоматический установщик в один клик:
+*(Поддерживает русский и английский интерфейс, автоматически устанавливает расширение в VLC и при желании настраивает FFmpeg).*
+
+#### Вариант 2: Скрипт-установщик в один клик (Без интернета / Из репозитория)
+Если вы клонировали репозиторий или скачали ZIP:
 ```cmd
 scripts\install-windows.bat
 ```
-*(Предлагает выбор языка: русский или английский, устанавливает бандл в `%APPDATA%\vlc\lua\extensions\` и проверяет наличие FFmpeg).*
+*(Предлагает выбор языка: русский или английский, копирует `reel-maker.lua` в `%APPDATA%\vlc\lua\extensions\` и проверяет FFmpeg).*
 
-Либо скомпилируйте установочный мастер `.exe` через Inno Setup 6:
+#### Ручная установка
+Скопируйте `dist/reel-maker.lua` (или `dist/reel-maker-ru.lua`) в:
 ```cmd
-iscc scripts\reel-maker.iss
-```
-
-Либо скопируйте `dist/reel-maker.lua` вручную в:
-```
 %APPDATA%\vlc\lua\extensions\reel-maker.lua
 ```
+
+---
+
+### Linux
+
+Запустите скрипт установки:
+```bash
+./scripts/install.sh ru     # Русская сборка
+./scripts/install.sh        # Английская сборка
+```
+
+Либо скопируйте `dist/reel-maker.lua` вручную:
+- **Snap VLC**: `~/snap/vlc/current/.local/share/vlc/lua/extensions/`
+- **Обычный (deb/rpm) VLC**: `~/.local/share/vlc/lua/extensions/`
 
 ---
 
@@ -115,6 +116,31 @@ winget install Gyan.FFmpeg
      - `[ 🗑️ Удалить ]`: Удаляет выбранные сцены, автоматически перенумеровывает оставшиеся и сохраняет `.scn` файл (при удалении нескольких сцен запрашивается подтверждение).
 6. **Пакетный экспорт**:
    - Нажмите `[ 📄 Скрипт нарезки ]`, чтобы сгенерировать готовый исполняемый файл `movie_cut_scenes.sh` (или `.bat`) в рабочей папке.
+
+---
+
+## Разработка и сборка из исходников
+
+Исходный модульный код расположен в папке `src/`. Готовые собранные файлы для релиза (`dist/reel-maker.lua`, `dist/reel-maker-en.lua`, `dist/reel-maker-ru.lua`) можно пересобрать самостоятельно:
+
+### Linux / macOS
+```bash
+./scripts/build.sh          # Собрать все бандлы (по умолчанию английский)
+./scripts/build.sh ru       # Собрать только русскую версию
+```
+
+### Windows (Командная строка CMD / PowerShell)
+```cmd
+scripts\build.bat           # Собрать все бандлы (по умолчанию английский)
+scripts\build.bat ru        # Собрать только русскую версию
+```
+*(или напрямую через Lua/LuaJIT: `luajit scripts/build.lua`)*
+
+### Сборка установщика Windows (.exe)
+Требуется [Inno Setup 6](https://jrsoftware.org/isdl.php):
+```cmd
+iscc scripts\reel-maker.iss
+```
 
 ---
 

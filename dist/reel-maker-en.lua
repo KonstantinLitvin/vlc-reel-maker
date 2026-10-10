@@ -145,7 +145,8 @@ return {
     err_no_scene_selected        = "No scene selected from the list",
     err_header_row_selected      = "Header row selected; please select a scene row",
     err_multi_scene_selected     = "Multiple scenes selected (%d selected); '%s' only applies to a single scene.",
-    err_export_script_failed     = "❌ Export script failed: %s"
+    err_export_script_failed     = "❌ Export script failed: %s",
+    err_ffmpeg_not_found         = "FFmpeg was not found. Run install-ffmpeg-windows.bat or click 'Export Cut Script'."
 }
 end)
 
@@ -394,6 +395,103 @@ function Platform.escape_batch_echo(str)
     return str
 end
 
+--- Format button text for platform: preserves rich emojis on Linux,
+-- and converts to clean, crisp desktop text on Windows to avoid tiny 8px distorted glyphs.
+-- @param text string Button label
+-- @param is_win boolean Optional override for testing
+-- @return string Formatted button text
+function Platform.format_btn(text, is_win)
+    if is_win == nil then is_win = Platform.is_windows end
+    if not is_win then
+        return text
+    end
+    local s = tostring(text or "")
+    -- Strip UTF-8 variation selector-16 (\xef\xb8\x8f) for uniform matching
+    s = s:gsub("\239\184\143", "")
+    if s:find("⏮") then
+        return s:gsub("⏮%s*", "◀ ")
+    elseif s:find("⏭") then
+        return s:gsub("⏭%s*", "") .. " ▶"
+    end
+    -- Remove common leading emoji icons on Windows
+    s = s:gsub("^⏱%s*", "")
+         :gsub("^➕%s*", "")
+         :gsub("^✏%s*", "")
+         :gsub("^🗑%s*", "")
+         :gsub("^✂%s*", "")
+         :gsub("^🎬%s*", "")
+         :gsub("^📁%s*", "")
+         :gsub("^📄%s*", "")
+    return s
+end
+
+--- Execute a command synchronously with window completely hidden on Windows
+-- On Windows, uses wscript.exe to run a temporary batch script with SW_HIDE (window style 0),
+-- completely eliminating console popups and blinking.
+-- Includes automatic fallback to cmd.exe /c if WScript is unavailable.
+-- @param cmd string Command line to run
+-- @param is_win boolean Optional override for testing
+-- @return boolean ok
+function Platform.execute_hidden(cmd, is_win)
+    if is_win == nil then is_win = Platform.is_windows end
+    if is_win then
+        local bat_path = Platform.temp_log_path("reel_maker_exec.bat", true)
+
+        -- Write batch file with UTF-8 codepage and explicit CRLF
+        local f_bat = io.open(bat_path, "wb")
+        if f_bat then
+            f_bat:write("@echo off\r\n")
+            f_bat:write("chcp 65001 >nul\r\n")
+            f_bat:write((cmd:gsub("\r?\n", "\r\n")) .. "\r\n")
+            f_bat:write("exit /b %ERRORLEVEL%\r\n")
+            f_bat:close()
+        else
+            return false
+        end
+
+        -- Strategy 1: In-process COM via luacom (0 console windows, zero external cmd parent)
+        local ok_com, luacom = pcall(require, "luacom")
+        if ok_com and luacom and luacom.CreateObject then
+            local ok_sh, sh = pcall(luacom.CreateObject, "WScript.Shell")
+            if ok_sh and sh and sh.Run then
+                local com_code = sh:Run("cmd.exe /c call " .. Platform.quote(bat_path, true), 0, true)
+                return (com_code == 0)
+            end
+        end
+
+        -- Strategy 2: VBScript hidden runner (window style 0 = hidden, wait = True)
+        local vbs_path = Platform.temp_log_path("reel_maker_exec.vbs", true)
+        local f_vbs = io.open(vbs_path, "wb")
+        if f_vbs then
+            f_vbs:write('Set sh = CreateObject("WScript.Shell")\r\n')
+            f_vbs:write('WScript.Quit sh.Run("cmd.exe /c call " & Chr(34) & WScript.Arguments(0) & Chr(34), 0, True)\r\n')
+            f_vbs:close()
+        end
+
+        local launch_cmd = string.format('start "" /min /wait wscript.exe //B //Nologo "%s" "%s"', vbs_path, bat_path)
+        if os and os.execute then
+            local code = os.execute(launch_cmd)
+            if code == 0 or code == true then
+                return true
+            end
+        end
+
+        -- Graceful fallback: direct minimized cmd.exe execution
+        if os and os.execute then
+            local fallback_cmd = string.format('start "" /min /wait cmd.exe /c "%s"', bat_path)
+            local code = os.execute(fallback_cmd)
+            return (code == 0 or code == true)
+        end
+        return false
+    else
+        if os and os.execute then
+            local code = os.execute(cmd)
+            return (code == 0 or code == true)
+        end
+        return false
+    end
+end
+
 --- Format non-blocking background command execution
 -- @param cmd string Core command line to run
 -- @param log_path string Log file destination
@@ -514,11 +612,14 @@ function Platform.dir_exists(dir, is_win)
 
     if is_win then
         local win_dir = dir:gsub("/", "\\"):gsub("\\+$", "")
-        local cmd = 'if exist ' .. Platform.quote(win_dir .. "\\*", true) .. ' (exit 0) else (exit 1)'
-        if os and os.execute then
-            local code = os.execute(cmd)
-            return (code == 0 or code == true)
+        -- On Windows, opening the virtual device 'nul' inside a directory confirms it exists
+        -- Pure file I/O: 0ms, 0 external processes, zero console window popups
+        local f = io.open(win_dir .. "\\nul", "r")
+        if f then
+            f:close()
+            return true
         end
+        return false
     else
         local posix_dir = dir:gsub("/+$", "")
         local cmd = 'test -d ' .. Platform.quote(posix_dir, false) .. ' 2>/dev/null'
@@ -546,26 +647,27 @@ function Platform.ensure_dir(dir, is_win)
         return true, false -- ok, already existed
     end
 
-    local cmd
     if is_win then
         local win_dir = dir:gsub("/", "\\"):gsub("\\+$", "")
-        cmd = 'if not exist ' .. Platform.quote(win_dir, true) .. ' mkdir ' .. Platform.quote(win_dir, true)
+        local cmd = 'cmd.exe /c if not exist ' .. Platform.quote(win_dir, true) .. ' mkdir ' .. Platform.quote(win_dir, true)
+        local success = Platform.execute_hidden(cmd, true)
+        if not success then
+            return false, "Failed to create directory: " .. dir
+        end
+        return true, true
     else
         local posix_dir = dir:gsub("/+$", "")
-        cmd = 'mkdir -p -- ' .. Platform.quote(posix_dir, false) .. ' 2>/dev/null'
+        local cmd = 'mkdir -p -- ' .. Platform.quote(posix_dir, false) .. ' 2>/dev/null'
+        if not (os and os.execute) then
+            return false, "os.execute is unavailable in this Lua environment"
+        end
+        local code = os.execute(cmd)
+        local success = (code == 0 or code == true)
+        if not success then
+            return false, "Failed to create directory: " .. dir
+        end
+        return true, true
     end
-
-    if not (os and os.execute) then
-        return false, "os.execute is unavailable in this Lua environment"
-    end
-
-    local code = os.execute(cmd)
-    local success = (code == 0 or code == true)
-    if not success then
-        return false, "Failed to create directory: " .. dir
-    end
-
-    return true, true -- ok, was newly created
 end
 
 --- List all .scn files in the specified directory, sorted alphabetically
@@ -576,6 +678,21 @@ function Platform.list_scn_files(dir, is_win)
     if not dir or dir:match("^%s*$") then return {} end
     dir = dir:match("^%s*(.-)%s*$")
     if is_win == nil then is_win = Platform.is_windows end
+
+    -- Inside VLC, use VLC's native C directory listing (zero external processes, zero console popups)
+    if vlc and vlc.net and vlc.net.opendir then
+        local ok, entries = pcall(vlc.net.opendir, dir)
+        if ok and entries then
+            local files = {}
+            for _, name in ipairs(entries) do
+                if not name:match("^%.") and name:match("%.[sS][cC][nN]$") then
+                    table.insert(files, name)
+                end
+            end
+            table.sort(files)
+            return files
+        end
+    end
 
     local cmd
     if is_win then
@@ -660,12 +777,20 @@ function CutterService.find_ffmpeg(is_win)
     if is_win == nil then is_win = Platform.is_windows end
 
     if is_win then
-        -- Check dedicated VLC tools directory in AppData
+        -- Check dedicated VLC tools directory and extension folder in AppData
         local appdata = os.getenv("APPDATA")
         if appdata then
-            local p = appdata .. "\\vlc\\bin\\ffmpeg.exe"
-            local f = io.open(p, "r")
-            if f then f:close(); return p end
+            local p_bin = appdata .. "\\vlc\\bin\\ffmpeg.exe"
+            local f_bin = io.open(p_bin, "r")
+            if f_bin then f_bin:close(); return p_bin end
+
+            local p_ext = appdata .. "\\vlc\\lua\\extensions\\ffmpeg.exe"
+            local f_ext = io.open(p_ext, "r")
+            if f_ext then f_ext:close(); return p_ext end
+
+            local p_vlc = appdata .. "\\vlc\\ffmpeg.exe"
+            local f_vlc = io.open(p_vlc, "r")
+            if f_vlc then f_vlc:close(); return p_vlc end
         end
 
         -- Check WinGet standard package link
@@ -680,6 +805,19 @@ function CutterService.find_ffmpeg(is_win)
         local p_root = "C:\\ffmpeg\\bin\\ffmpeg.exe"
         local f_root = io.open(p_root, "r")
         if f_root then f_root:close(); return p_root end
+
+        -- Check all directories in Windows %PATH% via pure file I/O (0 processes, 0 console windows)
+        local path_env = os.getenv("PATH")
+        if path_env then
+            for dir in path_env:gmatch("[^;]+") do
+                dir = dir:match("^%s*(.-)%s*$")
+                if dir ~= "" then
+                    local p = dir:gsub("[\\/]+$", "") .. "\\ffmpeg.exe"
+                    local f = io.open(p, "r")
+                    if f then f:close(); return p end
+                end
+            end
+        end
 
         return "ffmpeg.exe"
     else
@@ -705,6 +843,19 @@ function CutterService.find_ffmpeg(is_win)
         local f_usr = io.open("/usr/bin/ffmpeg", "r")
         if f_usr then f_usr:close(); return "/usr/bin/ffmpeg" end
 
+        -- Check all directories in POSIX PATH via pure file I/O
+        local path_env = os.getenv("PATH")
+        if path_env then
+            for dir in path_env:gmatch("[^:]+") do
+                dir = dir:match("^%s*(.-)%s*$")
+                if dir ~= "" then
+                    local p = dir:gsub("/+$", "") .. "/ffmpeg"
+                    local f = io.open(p, "r")
+                    if f then f:close(); return p end
+                end
+            end
+        end
+
         return "ffmpeg"
     end
 end
@@ -716,25 +867,28 @@ function CutterService.check_ffmpeg(is_win)
     if is_win == nil then is_win = Platform.is_windows end
     local bin = CutterService.find_ffmpeg(is_win)
 
-    -- Test executing binary with -version
-    local probe_cmd
-    if is_win then
-        probe_cmd = Platform.quote(bin, true) .. " -version > NUL 2>&1"
-    else
-        probe_cmd = Platform.quote(bin, false) .. " -version > /dev/null 2>&1"
-    end
-
-    if os and os.execute then
-        local code = os.execute(probe_cmd)
-        -- In Lua 5.1/LuaJIT, os.execute returns 0 or true on success
-        if code == 0 or code == true then
+    -- Fast-path: if binary is an absolute path (already checked via io.open in find_ffmpeg), it exists on disk
+    if Platform.is_absolute(bin, is_win) then
+        local f = io.open(bin, "r")
+        if f then
+            f:close()
             return true, bin
         end
     end
 
     if is_win then
-        return false, "FFmpeg was not found in PATH or %APPDATA%\\vlc\\bin\\. Run scripts\\install-ffmpeg-windows.bat or click 'Export Cut Script'."
+        -- On Windows, all known locations and PATH directories have already been checked via pure io.open.
+        -- Spawning a console probe would needlessly flash CMD windows.
+        return false, "FFmpeg was not found in PATH or %APPDATA%\\vlc\\bin\\. Run install-ffmpeg-windows.bat or click 'Export Cut Script'."
     else
+        -- Test executing binary with -version on POSIX
+        local probe_cmd = Platform.quote(bin, false) .. " -nostdin -version > /dev/null 2>&1"
+        if os and os.execute then
+            local code = os.execute(probe_cmd)
+            if code == 0 or code == true then
+                return true, bin
+            end
+        end
         return false, "FFmpeg was not found in VLC environment. Run ./scripts/get-ffmpeg.sh or click 'Export Cut Script'."
     end
 end
@@ -742,6 +896,7 @@ end
 --- Build individual FFmpeg cut command
 -- Uses lossless stream copy (-c copy) with input seeking for maximum speed
 function CutterService.build_cut_command(video_path, scene, output_path, is_win, ffmpeg_bin, work_dir)
+    if is_win == nil then is_win = Platform.is_windows end
     local bin = ffmpeg_bin or "ffmpeg"
     local start_str = scene.start_tc:to_string(true, ".")
     local end_str   = scene.end_tc:to_string(true, ".")
@@ -751,7 +906,7 @@ function CutterService.build_cut_command(video_path, scene, output_path, is_win,
     local q_in  = Platform.quote(video_path, is_win)
     local q_out = Platform.quote(output_path, is_win)
 
-    return string.format("%s -y -ss %s -to %s -i %s -c copy %s", q_bin, start_str, end_str, q_in, q_out)
+    return string.format("%s -nostdin -y -ss %s -to %s -i %s -c copy %s", q_bin, start_str, end_str, q_in, q_out)
 end
 
 --- Generate complete batch cut script for all scenes
@@ -761,6 +916,7 @@ function CutterService.generate_script(video_path, scenes, is_win, work_dir)
 
     if is_win then
         table.insert(lines, "@echo off")
+        table.insert(lines, "chcp 65001 >nul")
         table.insert(lines, "REM Batch cut script generated by VLC ReelMaker")
         table.insert(lines, 'echo ==================================================')
         table.insert(lines, 'echo Starting batch scene cutting with FFmpeg...')
@@ -807,6 +963,7 @@ end
 -- @param work_dir string|nil Optional target working directory
 -- @param scn_path string|nil Optional associated .scn file path
 function CutterService.export_script(video_path, scenes, is_win, work_dir, scn_path)
+    if is_win == nil then is_win = Platform.is_windows end
     if not video_path or video_path == "" then
         return false, "Video path is required to export cut script"
     end
@@ -864,62 +1021,81 @@ function CutterService.export_script(video_path, scenes, is_win, work_dir, scn_p
     return true, script_path
 end
 
---- Execute synchronous FFmpeg cut for single scene with exit code inspection & error logging
--- Lossless stream copy (-c copy) finishes in 50-200ms without noticeable UI pause
+--- Execute synchronous FFmpeg batch cut for multiple scenes in a single process
 -- @param video_path string Path to media file
--- @param scene Scene Target scene entity
+-- @param scenes table Array of Scene entities
 -- @param is_win boolean Optional override for testing
 -- @param work_dir string Optional custom working directory
--- @return boolean, string ok, out_path_or_error_detail
-function CutterService.cut_scene(video_path, scene, is_win, work_dir)
+-- @return boolean, table|string ok, out_paths_or_error_detail
+function CutterService.cut_batch(video_path, scenes, is_win, work_dir)
+    if is_win == nil then is_win = Platform.is_windows end
     if not video_path or video_path == "" then
         return false, "Video path is required for cutting"
     end
-    if not scene then
-        return false, "No scene specified"
+    if not scenes or #scenes == 0 then
+        return false, "No scenes specified"
     end
 
-    -- Verify FFmpeg binary is available before launching
     local has_ffmpeg, bin_or_err = CutterService.check_ffmpeg(is_win)
     if not has_ffmpeg then
         return false, bin_or_err
     end
 
-    local out_path = CutterService.derive_output_path(video_path, scene, work_dir)
-    local log_file = Platform.temp_log_path(string.format("vlc_cut_scene_%d.log", scene.id), is_win)
+    local log_file = Platform.temp_log_path("vlc_cut_batch.log", is_win)
     local q_log = Platform.quote(log_file, is_win)
 
-    local raw_cmd = CutterService.build_cut_command(video_path, scene, out_path, is_win, bin_or_err)
-    local full_cmd = raw_cmd .. " > " .. q_log .. " 2>&1"
+    -- Initialize / truncate temporary log file
+    local f_init = io.open(log_file, "w")
+    if f_init then f_init:close() end
 
-    if not (os and os.execute) then
-        return false, "os.execute is unavailable in this Lua environment"
+    local cmd_lines = {}
+    local out_paths = {}
+    for _, sc in ipairs(scenes) do
+        local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
+        table.insert(out_paths, out_path)
+        local cmd = CutterService.build_cut_command(video_path, sc, out_path, is_win, bin_or_err)
+        if is_win then
+            table.insert(cmd_lines, cmd .. " >> " .. q_log .. " 2>&1")
+            table.insert(cmd_lines, "if errorlevel 1 exit /b %errorlevel%")
+        else
+            table.insert(cmd_lines, cmd .. " >> " .. q_log .. " 2>&1")
+        end
     end
 
-    local code = os.execute(full_cmd)
-    local success = (code == 0 or code == true)
+    local batch_cmd
+    if is_win then
+        batch_cmd = table.concat(cmd_lines, "\r\n")
+    else
+        batch_cmd = "(" .. table.concat(cmd_lines, " && ") .. ")"
+    end
+
+    local success
+    local code
+    if is_win then
+        success = Platform.execute_hidden(batch_cmd, true)
+        code = success and 0 or 1
+    else
+        if not (os and os.execute) then
+            return false, "os.execute is unavailable in this Lua environment"
+        end
+        code = os.execute(batch_cmd)
+        success = (code == 0 or code == true)
+    end
 
     if success then
-        local f = io.open(out_path, "r")
-        if f then
-            f:close()
-            return true, out_path
-        else
-            return false, "FFmpeg exited successfully, but output file was not created: " .. out_path
-        end
+        return true, out_paths
     else
-        -- Extract error from FFmpeg log file
         local err_detail = "Exit code " .. tostring(code)
         local f_log = io.open(log_file, "r")
+        local log_body = ""
         if f_log then
             local last_lines = {}
             for line in f_log:lines() do
+                log_body = log_body .. line .. "\n"
                 line = line:match("^%s*(.-)%s*$")
                 if line ~= "" then
                     table.insert(last_lines, line)
-                    if #last_lines > 4 then
-                        table.remove(last_lines, 1)
-                    end
+                    if #last_lines > 4 then table.remove(last_lines, 1) end
                 end
             end
             f_log:close()
@@ -927,8 +1103,41 @@ function CutterService.cut_scene(video_path, scene, is_win, work_dir)
                 err_detail = table.concat(last_lines, " | ")
             end
         end
-        return false, string.format("FFmpeg failed (%s). Log: %s", err_detail, log_file)
+
+        local target_dir = (work_dir and work_dir ~= "") and work_dir or video_path:match("^(.*[\\/])")
+        if target_dir and log_body ~= "" then
+            local sep = (target_dir:find("\\") or is_win) and "\\" or "/"
+            if not target_dir:match("[\\/]$") then target_dir = target_dir .. sep end
+            local mirror_log = target_dir .. "vlc_cut_batch.log"
+            local f_m = io.open(mirror_log, "w")
+            if f_m then
+                f_m:write(log_body)
+                f_m:close()
+            end
+        end
+
+        local prefix = #scenes == 1 and "FFmpeg failed" or "FFmpeg batch cut failed"
+        return false, string.format("%s (%s). Log: %s", prefix, err_detail, log_file)
     end
+end
+
+--- Execute synchronous FFmpeg cut for single scene with exit code inspection & error logging
+-- Lossless stream copy (-c copy) finishes in 50-200ms without noticeable UI pause
+-- Delegates to cut_batch for consistent execution semantics across all platforms
+-- @param video_path string Path to media file
+-- @param scene Scene Target scene entity
+-- @param is_win boolean Optional override for testing
+-- @param work_dir string Optional custom working directory
+-- @return boolean, string ok, out_path_or_error_detail
+function CutterService.cut_scene(video_path, scene, is_win, work_dir)
+    if not scene then
+        return false, "No scene specified"
+    end
+    local ok, res = CutterService.cut_batch(video_path, { scene }, is_win, work_dir)
+    if ok and type(res) == "table" and res[1] then
+        return true, res[1]
+    end
+    return ok, res
 end
 
 return CutterService
@@ -1253,9 +1462,21 @@ function VlcPlayerAdapter.get_video_path()
     local path = (vlc.strings and vlc.strings.decode_uri) and vlc.strings.decode_uri(uri) or uri
     path = path:gsub("^file://", "")
 
-    -- Windows path normalization (e.g. /C:/...)
-    if path:match("^/[A-Z]:/") then
-        path = path:sub(2)
+    -- Windows path normalization (e.g. /C:/... or UNC //vmware-host/...)
+    local is_win = (package and package.config and package.config:sub(1, 1) == "\\") or false
+    if is_win then
+        if path:match("^/[a-zA-Z]:") then
+            path = path:sub(2)
+        elseif path:match("^///+") then
+            path = path:gsub("^///+", "//")
+        elseif not path:match("^[a-zA-Z]:") and not path:match("^[\\/]") then
+            path = "//" .. path
+        end
+        path = path:gsub("/", "\\")
+    else
+        if path:match("^/[a-zA-Z]:") then
+            path = path:sub(2)
+        end
     end
     return path
 end
@@ -1467,7 +1688,7 @@ function app:set_status(msg, level)
     end
 
     local formatted = table.concat(display_lines, "<br>")
-    local html = string.format("<div style='font-family:sans-serif; font-size:13px; margin:0; padding:0; line-height:1.35; word-wrap:break-word; color:%s;'>%s</div>", color, formatted)
+    local html = string.format("<div style='font-family:sans-serif; font-size:13px; word-wrap:break-word; color:%s;'>%s</div>", color, formatted)
 
     if self.status_box then
         self.status_box:set_text(html)
@@ -1539,12 +1760,13 @@ function app:update_media_display()
         end
     end
 
+    local header = Platform.format_btn(L.media_header)
     local text
     if media_name and media_name ~= "" then
         local display_name = truncate_middle(media_name, 45)
-        text = string.format("%s <span style='color:#1976d2; font-weight:bold;'>%s</span>", L.media_header, html_escape(display_name))
+        text = string.format("<span style='font-size:14px;'>%s <span style='color:#1976d2; font-weight:bold;'>%s</span></span>", header, html_escape(display_name))
     else
-        text = string.format("%s <span style='color:#777;'>%s</span>", L.media_header, L.media_none)
+        text = string.format("<span style='font-size:14px;'>%s <span style='color:#777;'>%s</span></span>", header, L.media_none)
     end
     self.media_box:set_text(text)
 end
@@ -2058,36 +2280,34 @@ function app:on_cut_selected()
         return
     end
 
-    local work_dir = self:get_work_dir()
-    local cut_count = 0
-    local failed = {}
-
-    for i, sc in ipairs(scenes) do
-        if #scenes > 1 then
-            self:set_status(string.format(L.status_cutting_progress, i, #scenes, sc.title))
-            if self.dlg and self.dlg.update then self.dlg:update() end
-        end
-
-        local ok, res = CutterService.cut_scene(video_path, sc, nil, work_dir)
-        if ok then
-            cut_count = cut_count + 1
-        else
-            table.insert(failed, string.format("Scene %d: %s", sc.id, tostring(res)))
-        end
+    -- Pre-flight check: verify FFmpeg binary is available before launching cuts
+    local has_ffmpeg, bin_or_err = CutterService.check_ffmpeg()
+    if not has_ffmpeg then
+        local msg = (L and L.err_ffmpeg_not_found) or bin_or_err
+        self:set_status("⚠️ " .. msg, "error")
+        return
     end
 
-    if #failed > 0 then
-        local err_summary = table.concat(failed, "\n")
-        self:set_status(string.format(L.warn_err_cut_batch, cut_count, #scenes, err_summary), "error")
-    else
-        if #scenes == 1 then
-            local sc = scenes[1]
-            local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
+    local work_dir = self:get_work_dir()
+    if #scenes == 1 then
+        local sc = scenes[1]
+        local ok, res = CutterService.cut_scene(video_path, sc, nil, work_dir)
+        if ok then
+            local out_path = res
             local basename = out_path:match("([^\\/]+)$") or out_path
             self:set_status(string.format(L.status_single_cut_complete, sc.id, basename, out_path), "success")
         else
+            self:set_status(string.format(L.warn_err_cut_batch, 0, 1, res), "error")
+        end
+    else
+        self:set_status(string.format(L.status_cutting_progress, 1, #scenes, "Batch"), "info")
+
+        local ok, res = CutterService.cut_batch(video_path, scenes, nil, work_dir)
+        if ok then
             local target_dir = (work_dir and work_dir ~= "") and work_dir or (video_path:match("^(.*[\\/])") or L.fallback_work_dir)
-            self:set_status(string.format(L.status_batch_cut_complete, cut_count, target_dir), "success")
+            self:set_status(string.format(L.status_batch_cut_complete, #scenes, target_dir), "success")
+        else
+            self:set_status(string.format(L.warn_err_cut_batch, 0, #scenes, tostring(res)), "error")
         end
     end
 end
@@ -2260,55 +2480,55 @@ function activate()
     -- Registered first so Qt QDialog designates it as the dialog's default autoDefault button.
     -- In Qt, pressing Enter in a single-line text input (such as Title) triggers the dialog's
     -- default button, invoking on_save_scene(). Grid coordinates remain at row 16, cols 9-12.
-    app.add_save_btn = app.dlg:add_button(L.btn_add_save, function() app:on_save_scene() end, 9, 16, 4, 1)
+    app.add_save_btn = app.dlg:add_button(Platform.format_btn(L.btn_add_save), function() app:on_save_scene() end, 9, 16, 4, 1, 210, 28)
 
     -- Row 1: Active Media Banner (Label, full width)
-    app.media_box = app.dlg:add_label("", 1, 1, 12, 1)
+    app.media_box = app.dlg:add_label("", 1, 1, 12, 1, 650, 24)
     app:update_media_display()
 
     -- Row 2: Working Directory input (Cols 1-9) & Set Dir button (Cols 10-12)
     local initial_work_dir = VlcPlayerAdapter.guess_work_dir()
-    app.workdir_input = app.dlg:add_text_input(initial_work_dir, 1, 2, 9, 1)
-    app.dlg:add_button(L.btn_set_dir, function() app:on_set_work_dir() end, 10, 2, 3, 1)
+    app.workdir_input = app.dlg:add_text_input(initial_work_dir, 1, 2, 9, 1, 480, 26)
+    app.dlg:add_button(Platform.format_btn(L.btn_set_dir), function() app:on_set_work_dir() end, 10, 2, 3, 1, 150, 26)
 
     -- Row 3: .scn file input (Cols 1-9) & Set .scn button (Cols 10-12)
     local initial_path = VlcPlayerAdapter.guess_scn_path()
     local initial_filename = initial_path:match("([^\\/]+)$") or initial_path
-    app.path_input = app.dlg:add_text_input(initial_filename, 1, 3, 9, 1)
-    app.dlg:add_button(L.btn_set_scn, function() app:on_set_scn_file() end, 10, 3, 3, 1)
+    app.path_input = app.dlg:add_text_input(initial_filename, 1, 3, 9, 1, 480, 26)
+    app.dlg:add_button(Platform.format_btn(L.btn_set_scn), function() app:on_set_scn_file() end, 10, 3, 3, 1, 150, 26)
 
     -- Rows 4-11: Scenes list view (height 8, full width)
-    app.list = app.dlg:add_list(1, 4, 12, 8)
+    app.list = app.dlg:add_list(1, 4, 12, 8, 650, 180)
     app.list:add_value(L.table_header, 0)
 
     -- Row 12: Scene Operations (Navigation, Edit, Delete - 4 equal buttons, span 3 each)
-    app.dlg:add_button(L.btn_to_start, function() app:on_jump_to_start() end,    1, 12, 3, 1)
-    app.dlg:add_button(L.btn_to_end,   function() app:on_jump_to_end() end,      4, 12, 3, 1)
-    app.dlg:add_button(L.btn_edit,     function() app:on_edit_selected() end,    7, 12, 3, 1)
-    app.dlg:add_button(L.btn_delete,   function() app:on_delete_selected() end, 10, 12, 3, 1)
+    app.dlg:add_button(Platform.format_btn(L.btn_to_start), function() app:on_jump_to_start() end,    1, 12, 3, 1, 155, 30)
+    app.dlg:add_button(Platform.format_btn(L.btn_to_end),   function() app:on_jump_to_end() end,      4, 12, 3, 1, 155, 30)
+    app.dlg:add_button(Platform.format_btn(L.btn_edit),     function() app:on_edit_selected() end,    7, 12, 3, 1, 155, 30)
+    app.dlg:add_button(Platform.format_btn(L.btn_delete),   function() app:on_delete_selected() end, 10, 12, 3, 1, 155, 30)
 
     -- Row 13: Production / Output (FFmpeg Actions: Cut & Export Script - 2 equal buttons, span 6 each)
-    app.dlg:add_button(L.btn_cut,             function() app:on_cut_selected() end, 1, 13, 6, 1)
-    app.dlg:add_button(L.btn_export_script, function() app:on_export_script() end, 7, 13, 6, 1)
+    app.dlg:add_button(Platform.format_btn(L.btn_cut),           function() app:on_cut_selected() end, 1, 13, 6, 1, 315, 32)
+    app.dlg:add_button(Platform.format_btn(L.btn_export_script), function() app:on_export_script() end, 7, 13, 6, 1, 315, 32)
 
     -- Row 14: Fragment Start input & Mark button
     app.dlg:add_label(L.lbl_start, 1, 14, 2, 1)
-    app.start_input = app.dlg:add_text_input("", 3, 14, 3, 1)
-    app.dlg:add_button(L.btn_mark, function() app:on_mark_start() end, 6, 14, 2, 1)
+    app.start_input = app.dlg:add_text_input("", 3, 14, 3, 1, 150, 26)
+    app.dlg:add_button(Platform.format_btn(L.btn_mark), function() app:on_mark_start() end, 6, 14, 2, 1, 90, 26)
 
     -- Row 15: Fragment End input & Mark button
     app.dlg:add_label(L.lbl_end, 1, 15, 2, 1)
-    app.end_input = app.dlg:add_text_input("", 3, 15, 3, 1)
-    app.dlg:add_button(L.btn_mark, function() app:on_mark_end() end, 6, 15, 2, 1)
+    app.end_input = app.dlg:add_text_input("", 3, 15, 3, 1, 150, 26)
+    app.dlg:add_button(Platform.format_btn(L.btn_mark), function() app:on_mark_end() end, 6, 15, 2, 1, 90, 26)
 
     -- Row 16: Scene Title input (Add/Save button registered above as primary default button)
     app.dlg:add_label(L.lbl_title, 1, 16, 2, 1)
-    app.title_input = app.dlg:add_text_input("", 3, 16, 6, 1)
+    app.title_input = app.dlg:add_text_input("", 3, 16, 6, 1, 315, 26)
 
-    -- Row 17: Fixed-height Scrollable & Copyable Status Area (QTextBrowser, height ~75-80px / ~4 lines, scrollbar as needed)
+    -- Row 17: Fixed-height Scrollable & Copyable Status Area (height ~75px, 2-3 lines)
     local available = Platform.list_scn_files(initial_work_dir)
     local avail_str = #available > 0 and ("<br>" .. L.status_avail_files .. " (" .. #available .. "): " .. table.concat(available, ", ")) or ""
-    app.status_box = app.dlg:add_html("<div style='font-family:sans-serif; font-size:13px; margin:0; padding:0; line-height:1.35; color:#666;'>" .. L.status_ready .. avail_str .. "</div>", 1, 17, 12, 1)
+    app.status_box = app.dlg:add_html("<div style='font-family:sans-serif; font-size:13px; color:#555;'>" .. L.status_ready .. avail_str .. "</div>", 1, 17, 12, 1, 650, 75)
 
     -- Track active context
     app.loaded_video_path = VlcPlayerAdapter.get_video_path()

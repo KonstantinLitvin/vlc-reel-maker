@@ -50,12 +50,20 @@ function CutterService.find_ffmpeg(is_win)
     if is_win == nil then is_win = Platform.is_windows end
 
     if is_win then
-        -- Check dedicated VLC tools directory in AppData
+        -- Check dedicated VLC tools directory and extension folder in AppData
         local appdata = os.getenv("APPDATA")
         if appdata then
-            local p = appdata .. "\\vlc\\bin\\ffmpeg.exe"
-            local f = io.open(p, "r")
-            if f then f:close(); return p end
+            local p_bin = appdata .. "\\vlc\\bin\\ffmpeg.exe"
+            local f_bin = io.open(p_bin, "r")
+            if f_bin then f_bin:close(); return p_bin end
+
+            local p_ext = appdata .. "\\vlc\\lua\\extensions\\ffmpeg.exe"
+            local f_ext = io.open(p_ext, "r")
+            if f_ext then f_ext:close(); return p_ext end
+
+            local p_vlc = appdata .. "\\vlc\\ffmpeg.exe"
+            local f_vlc = io.open(p_vlc, "r")
+            if f_vlc then f_vlc:close(); return p_vlc end
         end
 
         -- Check WinGet standard package link
@@ -70,6 +78,19 @@ function CutterService.find_ffmpeg(is_win)
         local p_root = "C:\\ffmpeg\\bin\\ffmpeg.exe"
         local f_root = io.open(p_root, "r")
         if f_root then f_root:close(); return p_root end
+
+        -- Check all directories in Windows %PATH% via pure file I/O (0 processes, 0 console windows)
+        local path_env = os.getenv("PATH")
+        if path_env then
+            for dir in path_env:gmatch("[^;]+") do
+                dir = dir:match("^%s*(.-)%s*$")
+                if dir ~= "" then
+                    local p = dir:gsub("[\\/]+$", "") .. "\\ffmpeg.exe"
+                    local f = io.open(p, "r")
+                    if f then f:close(); return p end
+                end
+            end
+        end
 
         return "ffmpeg.exe"
     else
@@ -95,6 +116,19 @@ function CutterService.find_ffmpeg(is_win)
         local f_usr = io.open("/usr/bin/ffmpeg", "r")
         if f_usr then f_usr:close(); return "/usr/bin/ffmpeg" end
 
+        -- Check all directories in POSIX PATH via pure file I/O
+        local path_env = os.getenv("PATH")
+        if path_env then
+            for dir in path_env:gmatch("[^:]+") do
+                dir = dir:match("^%s*(.-)%s*$")
+                if dir ~= "" then
+                    local p = dir:gsub("/+$", "") .. "/ffmpeg"
+                    local f = io.open(p, "r")
+                    if f then f:close(); return p end
+                end
+            end
+        end
+
         return "ffmpeg"
     end
 end
@@ -106,25 +140,28 @@ function CutterService.check_ffmpeg(is_win)
     if is_win == nil then is_win = Platform.is_windows end
     local bin = CutterService.find_ffmpeg(is_win)
 
-    -- Test executing binary with -version
-    local probe_cmd
-    if is_win then
-        probe_cmd = Platform.quote(bin, true) .. " -version > NUL 2>&1"
-    else
-        probe_cmd = Platform.quote(bin, false) .. " -version > /dev/null 2>&1"
-    end
-
-    if os and os.execute then
-        local code = os.execute(probe_cmd)
-        -- In Lua 5.1/LuaJIT, os.execute returns 0 or true on success
-        if code == 0 or code == true then
+    -- Fast-path: if binary is an absolute path (already checked via io.open in find_ffmpeg), it exists on disk
+    if Platform.is_absolute(bin, is_win) then
+        local f = io.open(bin, "r")
+        if f then
+            f:close()
             return true, bin
         end
     end
 
     if is_win then
-        return false, "FFmpeg was not found in PATH or %APPDATA%\\vlc\\bin\\. Run scripts\\install-ffmpeg-windows.bat or click 'Export Cut Script'."
+        -- On Windows, all known locations and PATH directories have already been checked via pure io.open.
+        -- Spawning a console probe would needlessly flash CMD windows.
+        return false, "FFmpeg was not found in PATH or %APPDATA%\\vlc\\bin\\. Run install-ffmpeg-windows.bat or click 'Export Cut Script'."
     else
+        -- Test executing binary with -version on POSIX
+        local probe_cmd = Platform.quote(bin, false) .. " -nostdin -version > /dev/null 2>&1"
+        if os and os.execute then
+            local code = os.execute(probe_cmd)
+            if code == 0 or code == true then
+                return true, bin
+            end
+        end
         return false, "FFmpeg was not found in VLC environment. Run ./scripts/get-ffmpeg.sh or click 'Export Cut Script'."
     end
 end
@@ -132,6 +169,7 @@ end
 --- Build individual FFmpeg cut command
 -- Uses lossless stream copy (-c copy) with input seeking for maximum speed
 function CutterService.build_cut_command(video_path, scene, output_path, is_win, ffmpeg_bin, work_dir)
+    if is_win == nil then is_win = Platform.is_windows end
     local bin = ffmpeg_bin or "ffmpeg"
     local start_str = scene.start_tc:to_string(true, ".")
     local end_str   = scene.end_tc:to_string(true, ".")
@@ -141,7 +179,7 @@ function CutterService.build_cut_command(video_path, scene, output_path, is_win,
     local q_in  = Platform.quote(video_path, is_win)
     local q_out = Platform.quote(output_path, is_win)
 
-    return string.format("%s -y -ss %s -to %s -i %s -c copy %s", q_bin, start_str, end_str, q_in, q_out)
+    return string.format("%s -nostdin -y -ss %s -to %s -i %s -c copy %s", q_bin, start_str, end_str, q_in, q_out)
 end
 
 --- Generate complete batch cut script for all scenes
@@ -151,6 +189,7 @@ function CutterService.generate_script(video_path, scenes, is_win, work_dir)
 
     if is_win then
         table.insert(lines, "@echo off")
+        table.insert(lines, "chcp 65001 >nul")
         table.insert(lines, "REM Batch cut script generated by VLC ReelMaker")
         table.insert(lines, 'echo ==================================================')
         table.insert(lines, 'echo Starting batch scene cutting with FFmpeg...')
@@ -197,6 +236,7 @@ end
 -- @param work_dir string|nil Optional target working directory
 -- @param scn_path string|nil Optional associated .scn file path
 function CutterService.export_script(video_path, scenes, is_win, work_dir, scn_path)
+    if is_win == nil then is_win = Platform.is_windows end
     if not video_path or video_path == "" then
         return false, "Video path is required to export cut script"
     end
@@ -254,62 +294,81 @@ function CutterService.export_script(video_path, scenes, is_win, work_dir, scn_p
     return true, script_path
 end
 
---- Execute synchronous FFmpeg cut for single scene with exit code inspection & error logging
--- Lossless stream copy (-c copy) finishes in 50-200ms without noticeable UI pause
+--- Execute synchronous FFmpeg batch cut for multiple scenes in a single process
 -- @param video_path string Path to media file
--- @param scene Scene Target scene entity
+-- @param scenes table Array of Scene entities
 -- @param is_win boolean Optional override for testing
 -- @param work_dir string Optional custom working directory
--- @return boolean, string ok, out_path_or_error_detail
-function CutterService.cut_scene(video_path, scene, is_win, work_dir)
+-- @return boolean, table|string ok, out_paths_or_error_detail
+function CutterService.cut_batch(video_path, scenes, is_win, work_dir)
+    if is_win == nil then is_win = Platform.is_windows end
     if not video_path or video_path == "" then
         return false, "Video path is required for cutting"
     end
-    if not scene then
-        return false, "No scene specified"
+    if not scenes or #scenes == 0 then
+        return false, "No scenes specified"
     end
 
-    -- Verify FFmpeg binary is available before launching
     local has_ffmpeg, bin_or_err = CutterService.check_ffmpeg(is_win)
     if not has_ffmpeg then
         return false, bin_or_err
     end
 
-    local out_path = CutterService.derive_output_path(video_path, scene, work_dir)
-    local log_file = Platform.temp_log_path(string.format("vlc_cut_scene_%d.log", scene.id), is_win)
+    local log_file = Platform.temp_log_path("vlc_cut_batch.log", is_win)
     local q_log = Platform.quote(log_file, is_win)
 
-    local raw_cmd = CutterService.build_cut_command(video_path, scene, out_path, is_win, bin_or_err)
-    local full_cmd = raw_cmd .. " > " .. q_log .. " 2>&1"
+    -- Initialize / truncate temporary log file
+    local f_init = io.open(log_file, "w")
+    if f_init then f_init:close() end
 
-    if not (os and os.execute) then
-        return false, "os.execute is unavailable in this Lua environment"
+    local cmd_lines = {}
+    local out_paths = {}
+    for _, sc in ipairs(scenes) do
+        local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
+        table.insert(out_paths, out_path)
+        local cmd = CutterService.build_cut_command(video_path, sc, out_path, is_win, bin_or_err)
+        if is_win then
+            table.insert(cmd_lines, cmd .. " >> " .. q_log .. " 2>&1")
+            table.insert(cmd_lines, "if errorlevel 1 exit /b %errorlevel%")
+        else
+            table.insert(cmd_lines, cmd .. " >> " .. q_log .. " 2>&1")
+        end
     end
 
-    local code = os.execute(full_cmd)
-    local success = (code == 0 or code == true)
+    local batch_cmd
+    if is_win then
+        batch_cmd = table.concat(cmd_lines, "\r\n")
+    else
+        batch_cmd = "(" .. table.concat(cmd_lines, " && ") .. ")"
+    end
+
+    local success
+    local code
+    if is_win then
+        success = Platform.execute_hidden(batch_cmd, true)
+        code = success and 0 or 1
+    else
+        if not (os and os.execute) then
+            return false, "os.execute is unavailable in this Lua environment"
+        end
+        code = os.execute(batch_cmd)
+        success = (code == 0 or code == true)
+    end
 
     if success then
-        local f = io.open(out_path, "r")
-        if f then
-            f:close()
-            return true, out_path
-        else
-            return false, "FFmpeg exited successfully, but output file was not created: " .. out_path
-        end
+        return true, out_paths
     else
-        -- Extract error from FFmpeg log file
         local err_detail = "Exit code " .. tostring(code)
         local f_log = io.open(log_file, "r")
+        local log_body = ""
         if f_log then
             local last_lines = {}
             for line in f_log:lines() do
+                log_body = log_body .. line .. "\n"
                 line = line:match("^%s*(.-)%s*$")
                 if line ~= "" then
                     table.insert(last_lines, line)
-                    if #last_lines > 4 then
-                        table.remove(last_lines, 1)
-                    end
+                    if #last_lines > 4 then table.remove(last_lines, 1) end
                 end
             end
             f_log:close()
@@ -317,8 +376,41 @@ function CutterService.cut_scene(video_path, scene, is_win, work_dir)
                 err_detail = table.concat(last_lines, " | ")
             end
         end
-        return false, string.format("FFmpeg failed (%s). Log: %s", err_detail, log_file)
+
+        local target_dir = (work_dir and work_dir ~= "") and work_dir or video_path:match("^(.*[\\/])")
+        if target_dir and log_body ~= "" then
+            local sep = (target_dir:find("\\") or is_win) and "\\" or "/"
+            if not target_dir:match("[\\/]$") then target_dir = target_dir .. sep end
+            local mirror_log = target_dir .. "vlc_cut_batch.log"
+            local f_m = io.open(mirror_log, "w")
+            if f_m then
+                f_m:write(log_body)
+                f_m:close()
+            end
+        end
+
+        local prefix = #scenes == 1 and "FFmpeg failed" or "FFmpeg batch cut failed"
+        return false, string.format("%s (%s). Log: %s", prefix, err_detail, log_file)
     end
+end
+
+--- Execute synchronous FFmpeg cut for single scene with exit code inspection & error logging
+-- Lossless stream copy (-c copy) finishes in 50-200ms without noticeable UI pause
+-- Delegates to cut_batch for consistent execution semantics across all platforms
+-- @param video_path string Path to media file
+-- @param scene Scene Target scene entity
+-- @param is_win boolean Optional override for testing
+-- @param work_dir string Optional custom working directory
+-- @return boolean, string ok, out_path_or_error_detail
+function CutterService.cut_scene(video_path, scene, is_win, work_dir)
+    if not scene then
+        return false, "No scene specified"
+    end
+    local ok, res = CutterService.cut_batch(video_path, { scene }, is_win, work_dir)
+    if ok and type(res) == "table" and res[1] then
+        return true, res[1]
+    end
+    return ok, res
 end
 
 return CutterService

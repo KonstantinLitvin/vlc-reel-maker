@@ -39,55 +39,55 @@ function activate()
     -- Registered first so Qt QDialog designates it as the dialog's default autoDefault button.
     -- In Qt, pressing Enter in a single-line text input (such as Title) triggers the dialog's
     -- default button, invoking on_save_scene(). Grid coordinates remain at row 16, cols 9-12.
-    app.add_save_btn = app.dlg:add_button(L.btn_add_save, function() app:on_save_scene() end, 9, 16, 4, 1)
+    app.add_save_btn = app.dlg:add_button(Platform.format_btn(L.btn_add_save), function() app:on_save_scene() end, 9, 16, 4, 1, 210, 28)
 
     -- Row 1: Active Media Banner (Label, full width)
-    app.media_box = app.dlg:add_label("", 1, 1, 12, 1)
+    app.media_box = app.dlg:add_label("", 1, 1, 12, 1, 650, 24)
     app:update_media_display()
 
     -- Row 2: Working Directory input (Cols 1-9) & Set Dir button (Cols 10-12)
     local initial_work_dir = VlcPlayerAdapter.guess_work_dir()
-    app.workdir_input = app.dlg:add_text_input(initial_work_dir, 1, 2, 9, 1)
-    app.dlg:add_button(L.btn_set_dir, function() app:on_set_work_dir() end, 10, 2, 3, 1)
+    app.workdir_input = app.dlg:add_text_input(initial_work_dir, 1, 2, 9, 1, 480, 26)
+    app.dlg:add_button(Platform.format_btn(L.btn_set_dir), function() app:on_set_work_dir() end, 10, 2, 3, 1, 150, 26)
 
     -- Row 3: .scn file input (Cols 1-9) & Set .scn button (Cols 10-12)
     local initial_path = VlcPlayerAdapter.guess_scn_path()
     local initial_filename = initial_path:match("([^\\/]+)$") or initial_path
-    app.path_input = app.dlg:add_text_input(initial_filename, 1, 3, 9, 1)
-    app.dlg:add_button(L.btn_set_scn, function() app:on_set_scn_file() end, 10, 3, 3, 1)
+    app.path_input = app.dlg:add_text_input(initial_filename, 1, 3, 9, 1, 480, 26)
+    app.dlg:add_button(Platform.format_btn(L.btn_set_scn), function() app:on_set_scn_file() end, 10, 3, 3, 1, 150, 26)
 
     -- Rows 4-11: Scenes list view (height 8, full width)
-    app.list = app.dlg:add_list(1, 4, 12, 8)
+    app.list = app.dlg:add_list(1, 4, 12, 8, 650, 180)
     app.list:add_value(L.table_header, 0)
 
     -- Row 12: Scene Operations (Navigation, Edit, Delete - 4 equal buttons, span 3 each)
-    app.dlg:add_button(L.btn_to_start, function() app:on_jump_to_start() end,    1, 12, 3, 1)
-    app.dlg:add_button(L.btn_to_end,   function() app:on_jump_to_end() end,      4, 12, 3, 1)
-    app.dlg:add_button(L.btn_edit,     function() app:on_edit_selected() end,    7, 12, 3, 1)
-    app.dlg:add_button(L.btn_delete,   function() app:on_delete_selected() end, 10, 12, 3, 1)
+    app.dlg:add_button(Platform.format_btn(L.btn_to_start), function() app:on_jump_to_start() end,    1, 12, 3, 1, 155, 30)
+    app.dlg:add_button(Platform.format_btn(L.btn_to_end),   function() app:on_jump_to_end() end,      4, 12, 3, 1, 155, 30)
+    app.dlg:add_button(Platform.format_btn(L.btn_edit),     function() app:on_edit_selected() end,    7, 12, 3, 1, 155, 30)
+    app.dlg:add_button(Platform.format_btn(L.btn_delete),   function() app:on_delete_selected() end, 10, 12, 3, 1, 155, 30)
 
     -- Row 13: Production / Output (FFmpeg Actions: Cut & Export Script - 2 equal buttons, span 6 each)
-    app.dlg:add_button(L.btn_cut,             function() app:on_cut_selected() end, 1, 13, 6, 1)
-    app.dlg:add_button(L.btn_export_script, function() app:on_export_script() end, 7, 13, 6, 1)
+    app.dlg:add_button(Platform.format_btn(L.btn_cut),           function() app:on_cut_selected() end, 1, 13, 6, 1, 315, 32)
+    app.dlg:add_button(Platform.format_btn(L.btn_export_script), function() app:on_export_script() end, 7, 13, 6, 1, 315, 32)
 
     -- Row 14: Fragment Start input & Mark button
     app.dlg:add_label(L.lbl_start, 1, 14, 2, 1)
-    app.start_input = app.dlg:add_text_input("", 3, 14, 3, 1)
-    app.dlg:add_button(L.btn_mark, function() app:on_mark_start() end, 6, 14, 2, 1)
+    app.start_input = app.dlg:add_text_input("", 3, 14, 3, 1, 150, 26)
+    app.dlg:add_button(Platform.format_btn(L.btn_mark), function() app:on_mark_start() end, 6, 14, 2, 1, 90, 26)
 
     -- Row 15: Fragment End input & Mark button
     app.dlg:add_label(L.lbl_end, 1, 15, 2, 1)
-    app.end_input = app.dlg:add_text_input("", 3, 15, 3, 1)
-    app.dlg:add_button(L.btn_mark, function() app:on_mark_end() end, 6, 15, 2, 1)
+    app.end_input = app.dlg:add_text_input("", 3, 15, 3, 1, 150, 26)
+    app.dlg:add_button(Platform.format_btn(L.btn_mark), function() app:on_mark_end() end, 6, 15, 2, 1, 90, 26)
 
     -- Row 16: Scene Title input (Add/Save button registered above as primary default button)
     app.dlg:add_label(L.lbl_title, 1, 16, 2, 1)
-    app.title_input = app.dlg:add_text_input("", 3, 16, 6, 1)
+    app.title_input = app.dlg:add_text_input("", 3, 16, 6, 1, 315, 26)
 
-    -- Row 17: Fixed-height Scrollable & Copyable Status Area (QTextBrowser, height ~75-80px / ~4 lines, scrollbar as needed)
+    -- Row 17: Fixed-height Scrollable & Copyable Status Area (height ~75px, 2-3 lines)
     local available = Platform.list_scn_files(initial_work_dir)
     local avail_str = #available > 0 and ("<br>" .. L.status_avail_files .. " (" .. #available .. "): " .. table.concat(available, ", ")) or ""
-    app.status_box = app.dlg:add_html("<div style='font-family:sans-serif; font-size:13px; margin:0; padding:0; line-height:1.35; color:#666;'>" .. L.status_ready .. avail_str .. "</div>", 1, 17, 12, 1)
+    app.status_box = app.dlg:add_html("<div style='font-family:sans-serif; font-size:13px; color:#555;'>" .. L.status_ready .. avail_str .. "</div>", 1, 17, 12, 1, 650, 75)
 
     -- Track active context
     app.loaded_video_path = VlcPlayerAdapter.get_video_path()

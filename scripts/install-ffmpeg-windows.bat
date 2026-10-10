@@ -2,7 +2,7 @@
 setlocal
 
 REM Windows FFmpeg installer / setup for VLC ReelMaker
-REM Checks for existing ffmpeg, attempts winget install, or downloads to %APPDATA%\vlc\bin
+REM Checks for bundled ffmpeg, existing ffmpeg, attempts winget install, or downloads to %APPDATA%\vlc\bin
 
 set "NON_INTERACTIVE=0"
 if /i "%~1"=="--silent" set "NON_INTERACTIVE=1"
@@ -32,11 +32,31 @@ if exist "%APPDATA%\vlc\bin\ffmpeg.exe" (
 echo FFmpeg is not found in PATH or %APPDATA%\vlc\bin\.
 echo.
 
-REM Option 1: Try winget
+REM Option 1: Check if ffmpeg.exe exists locally in the package folder
+set "LOCAL_FFMPEG="
+if exist "%~dp0ffmpeg.exe" set "LOCAL_FFMPEG=%~dp0ffmpeg.exe"
+if exist "%~dp0dist\ffmpeg.exe" set "LOCAL_FFMPEG=%~dp0dist\ffmpeg.exe"
+if exist "%~dp0..\dist\ffmpeg.exe" set "LOCAL_FFMPEG=%~dp0..\dist\ffmpeg.exe"
+
+if defined LOCAL_FFMPEG (
+    echo Option 1: Found local ffmpeg.exe at "%LOCAL_FFMPEG%"
+    set "TARGET_DIR=%APPDATA%\vlc\bin"
+    if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
+    copy /y "%LOCAL_FFMPEG%" "%TARGET_DIR%\ffmpeg.exe" >nul
+    set "EXT_DIR=%APPDATA%\vlc\lua\extensions"
+    if not exist "%EXT_DIR%" mkdir "%EXT_DIR%"
+    copy /y "%LOCAL_FFMPEG%" "%EXT_DIR%\ffmpeg.exe" >nul
+    if exist "%TARGET_DIR%\ffmpeg.exe" (
+        echo [OK] Successfully copied ffmpeg.exe to "%TARGET_DIR%\ffmpeg.exe".
+        goto :done
+    )
+)
+
+REM Option 2: Try winget
 where winget.exe >nul 2>&1
 if errorlevel 1 goto :try_download
 
-echo Option 1: Attempting installation via winget...
+echo Option 2: Attempting installation via winget...
 winget install Gyan.FFmpeg --accept-package-agreements --accept-source-agreements
 if not errorlevel 1 (
     echo [OK] Successfully installed FFmpeg via winget.
@@ -47,7 +67,7 @@ echo Winget installation failed. Falling back to standalone download...
 
 :try_download
 echo.
-echo Option 2: Downloading standalone FFmpeg to %APPDATA%\vlc\bin\...
+echo Option 3: Downloading standalone FFmpeg to %APPDATA%\vlc\bin\...
 set "TARGET_DIR=%APPDATA%\vlc\bin"
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 
@@ -71,7 +91,7 @@ if exist "%APPDATA%\vlc\bin\ffmpeg.exe" (
 
 :done
 echo ==================================================
-echo Setup complete. Restart VLC and open View -> ReelMaker.
+echo Setup complete. Restart VLC and open View -^> ReelMaker.
 echo ==================================================
 if "%NON_INTERACTIVE%"=="0" pause
 endlocal

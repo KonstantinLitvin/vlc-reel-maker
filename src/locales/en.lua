@@ -113,5 +113,6 @@ return {
     err_no_scene_selected        = "No scene selected from the list",
     err_header_row_selected      = "Header row selected; please select a scene row",
     err_multi_scene_selected     = "Multiple scenes selected (%d selected); '%s' only applies to a single scene.",
-    err_export_script_failed     = "❌ Export script failed: %s"
+    err_export_script_failed     = "❌ Export script failed: %s",
+    err_ffmpeg_not_found         = "FFmpeg was not found. Run install-ffmpeg-windows.bat or click 'Export Cut Script'."
 }

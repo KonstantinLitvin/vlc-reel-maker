@@ -70,7 +70,7 @@ Source: "install-ffmpeg-windows.bat"; DestDir: "{tmp}"; Flags: deleteafterinstal
 Type: files; Name: "{app}\scene-marker.lua"
 
 [Run]
-Filename: "{cmd}"; Parameters: "/c """"{tmp}\install-ffmpeg-windows.bat"" --silent""""; Tasks: setupffmpeg; StatusMsg: "Configuring FFmpeg..."; Flags: runhidden waituntilterminated
+Filename: "{cmd}"; Parameters: "/c ""{tmp}\install-ffmpeg-windows.bat"" --silent"; Tasks: setupffmpeg; StatusMsg: "Configuring FFmpeg..."; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
 Type: files; Name: "{app}\reel-maker.lua"

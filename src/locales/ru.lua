@@ -113,5 +113,6 @@ return {
     err_no_scene_selected        = "В списке не выбрана ни одна сцена",
     err_header_row_selected      = "Выбрана строка заголовка; пожалуйста, выберите строку со сценой",
     err_multi_scene_selected     = "Выбрано несколько сцен (%d выбрано); действие '%s' применимо только к одной сцене.",
-    err_export_script_failed     = "❌ Ошибка экспорта скрипта: %s"
+    err_export_script_failed     = "❌ Ошибка экспорта скрипта: %s",
+    err_ffmpeg_not_found         = "FFmpeg не найден. Запустите install-ffmpeg-windows.bat или нажмите 'Скрипт нарезки'."
 }

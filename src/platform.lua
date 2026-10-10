@@ -39,6 +39,103 @@ function Platform.escape_batch_echo(str)
     return str
 end
 
+--- Format button text for platform: preserves rich emojis on Linux,
+-- and converts to clean, crisp desktop text on Windows to avoid tiny 8px distorted glyphs.
+-- @param text string Button label
+-- @param is_win boolean Optional override for testing
+-- @return string Formatted button text
+function Platform.format_btn(text, is_win)
+    if is_win == nil then is_win = Platform.is_windows end
+    if not is_win then
+        return text
+    end
+    local s = tostring(text or "")
+    -- Strip UTF-8 variation selector-16 (\xef\xb8\x8f) for uniform matching
+    s = s:gsub("\239\184\143", "")
+    if s:find("⏮") then
+        return s:gsub("⏮%s*", "◀ ")
+    elseif s:find("⏭") then
+        return s:gsub("⏭%s*", "") .. " ▶"
+    end
+    -- Remove common leading emoji icons on Windows
+    s = s:gsub("^⏱%s*", "")
+         :gsub("^➕%s*", "")
+         :gsub("^✏%s*", "")
+         :gsub("^🗑%s*", "")
+         :gsub("^✂%s*", "")
+         :gsub("^🎬%s*", "")
+         :gsub("^📁%s*", "")
+         :gsub("^📄%s*", "")
+    return s
+end
+
+--- Execute a command synchronously with window completely hidden on Windows
+-- On Windows, uses wscript.exe to run a temporary batch script with SW_HIDE (window style 0),
+-- completely eliminating console popups and blinking.
+-- Includes automatic fallback to cmd.exe /c if WScript is unavailable.
+-- @param cmd string Command line to run
+-- @param is_win boolean Optional override for testing
+-- @return boolean ok
+function Platform.execute_hidden(cmd, is_win)
+    if is_win == nil then is_win = Platform.is_windows end
+    if is_win then
+        local bat_path = Platform.temp_log_path("reel_maker_exec.bat", true)
+
+        -- Write batch file with UTF-8 codepage and explicit CRLF
+        local f_bat = io.open(bat_path, "wb")
+        if f_bat then
+            f_bat:write("@echo off\r\n")
+            f_bat:write("chcp 65001 >nul\r\n")
+            f_bat:write((cmd:gsub("\r?\n", "\r\n")) .. "\r\n")
+            f_bat:write("exit /b %ERRORLEVEL%\r\n")
+            f_bat:close()
+        else
+            return false
+        end
+
+        -- Strategy 1: In-process COM via luacom (0 console windows, zero external cmd parent)
+        local ok_com, luacom = pcall(require, "luacom")
+        if ok_com and luacom and luacom.CreateObject then
+            local ok_sh, sh = pcall(luacom.CreateObject, "WScript.Shell")
+            if ok_sh and sh and sh.Run then
+                local com_code = sh:Run("cmd.exe /c call " .. Platform.quote(bat_path, true), 0, true)
+                return (com_code == 0)
+            end
+        end
+
+        -- Strategy 2: VBScript hidden runner (window style 0 = hidden, wait = True)
+        local vbs_path = Platform.temp_log_path("reel_maker_exec.vbs", true)
+        local f_vbs = io.open(vbs_path, "wb")
+        if f_vbs then
+            f_vbs:write('Set sh = CreateObject("WScript.Shell")\r\n')
+            f_vbs:write('WScript.Quit sh.Run("cmd.exe /c call " & Chr(34) & WScript.Arguments(0) & Chr(34), 0, True)\r\n')
+            f_vbs:close()
+        end
+
+        local launch_cmd = string.format('start "" /min /wait wscript.exe //B //Nologo "%s" "%s"', vbs_path, bat_path)
+        if os and os.execute then
+            local code = os.execute(launch_cmd)
+            if code == 0 or code == true then
+                return true
+            end
+        end
+
+        -- Graceful fallback: direct minimized cmd.exe execution
+        if os and os.execute then
+            local fallback_cmd = string.format('start "" /min /wait cmd.exe /c "%s"', bat_path)
+            local code = os.execute(fallback_cmd)
+            return (code == 0 or code == true)
+        end
+        return false
+    else
+        if os and os.execute then
+            local code = os.execute(cmd)
+            return (code == 0 or code == true)
+        end
+        return false
+    end
+end
+
 --- Format non-blocking background command execution
 -- @param cmd string Core command line to run
 -- @param log_path string Log file destination
@@ -159,11 +256,14 @@ function Platform.dir_exists(dir, is_win)
 
     if is_win then
         local win_dir = dir:gsub("/", "\\"):gsub("\\+$", "")
-        local cmd = 'if exist ' .. Platform.quote(win_dir .. "\\*", true) .. ' (exit 0) else (exit 1)'
-        if os and os.execute then
-            local code = os.execute(cmd)
-            return (code == 0 or code == true)
+        -- On Windows, opening the virtual device 'nul' inside a directory confirms it exists
+        -- Pure file I/O: 0ms, 0 external processes, zero console window popups
+        local f = io.open(win_dir .. "\\nul", "r")
+        if f then
+            f:close()
+            return true
         end
+        return false
     else
         local posix_dir = dir:gsub("/+$", "")
         local cmd = 'test -d ' .. Platform.quote(posix_dir, false) .. ' 2>/dev/null'
@@ -191,26 +291,27 @@ function Platform.ensure_dir(dir, is_win)
         return true, false -- ok, already existed
     end
 
-    local cmd
     if is_win then
         local win_dir = dir:gsub("/", "\\"):gsub("\\+$", "")
-        cmd = 'if not exist ' .. Platform.quote(win_dir, true) .. ' mkdir ' .. Platform.quote(win_dir, true)
+        local cmd = 'cmd.exe /c if not exist ' .. Platform.quote(win_dir, true) .. ' mkdir ' .. Platform.quote(win_dir, true)
+        local success = Platform.execute_hidden(cmd, true)
+        if not success then
+            return false, "Failed to create directory: " .. dir
+        end
+        return true, true
     else
         local posix_dir = dir:gsub("/+$", "")
-        cmd = 'mkdir -p -- ' .. Platform.quote(posix_dir, false) .. ' 2>/dev/null'
+        local cmd = 'mkdir -p -- ' .. Platform.quote(posix_dir, false) .. ' 2>/dev/null'
+        if not (os and os.execute) then
+            return false, "os.execute is unavailable in this Lua environment"
+        end
+        local code = os.execute(cmd)
+        local success = (code == 0 or code == true)
+        if not success then
+            return false, "Failed to create directory: " .. dir
+        end
+        return true, true
     end
-
-    if not (os and os.execute) then
-        return false, "os.execute is unavailable in this Lua environment"
-    end
-
-    local code = os.execute(cmd)
-    local success = (code == 0 or code == true)
-    if not success then
-        return false, "Failed to create directory: " .. dir
-    end
-
-    return true, true -- ok, was newly created
 end
 
 --- List all .scn files in the specified directory, sorted alphabetically
@@ -221,6 +322,21 @@ function Platform.list_scn_files(dir, is_win)
     if not dir or dir:match("^%s*$") then return {} end
     dir = dir:match("^%s*(.-)%s*$")
     if is_win == nil then is_win = Platform.is_windows end
+
+    -- Inside VLC, use VLC's native C directory listing (zero external processes, zero console popups)
+    if vlc and vlc.net and vlc.net.opendir then
+        local ok, entries = pcall(vlc.net.opendir, dir)
+        if ok and entries then
+            local files = {}
+            for _, name in ipairs(entries) do
+                if not name:match("^%.") and name:match("%.[sS][cC][nN]$") then
+                    table.insert(files, name)
+                end
+            end
+            table.sort(files)
+            return files
+        end
+    end
 
     local cmd
     if is_win then

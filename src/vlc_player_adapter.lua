@@ -87,9 +87,21 @@ function VlcPlayerAdapter.get_video_path()
     local path = (vlc.strings and vlc.strings.decode_uri) and vlc.strings.decode_uri(uri) or uri
     path = path:gsub("^file://", "")
 
-    -- Windows path normalization (e.g. /C:/...)
-    if path:match("^/[A-Z]:/") then
-        path = path:sub(2)
+    -- Windows path normalization (e.g. /C:/... or UNC //vmware-host/...)
+    local is_win = (package and package.config and package.config:sub(1, 1) == "\\") or false
+    if is_win then
+        if path:match("^/[a-zA-Z]:") then
+            path = path:sub(2)
+        elseif path:match("^///+") then
+            path = path:gsub("^///+", "//")
+        elseif not path:match("^[a-zA-Z]:") and not path:match("^[\\/]") then
+            path = "//" .. path
+        end
+        path = path:gsub("/", "\\")
+    else
+        if path:match("^/[a-zA-Z]:") then
+            path = path:sub(2)
+        end
     end
     return path
 end

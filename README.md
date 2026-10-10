@@ -23,43 +23,44 @@ Scene timestamps and titles are saved in `.scn` files. Marked fragments can be c
 
 ---
 
-## Build and Installation
+## Installation
 
-### 1. Build the Extension
-The source code is in `src/`. Build it into a single extension file, `dist/reel-maker.lua`:
-```bash
-./scripts/build.sh          # Default: English
-./scripts/build.sh ru       # Russian build
-```
+Pre-compiled extension bundles are already provided in `dist/`.
 
-### 2. Extension Installation
+### Windows
 
-#### Linux
-Run the installation script (which automatically builds and installs `dist/reel-maker.lua`):
-```bash
-./scripts/install.sh        # Install default English build
-./scripts/install.sh ru     # Install Russian build
-```
-Or manually copy `dist/reel-maker.lua` to:
-- **Snap VLC**: `~/snap/vlc/current/.local/share/vlc/lua/extensions/`
-- **Native VLC**: `~/.local/share/vlc/lua/extensions/`
+#### Option 1: Installer Wizard (Recommended)
+Download and run the setup wizard from [GitHub Releases](https://github.com/KonstantinLitvin/vlc-reel-maker/releases):
+* `ReelMaker-Setup-v1.2.exe`
 
-#### Windows
-Run the automatic installer:
+*(Supports English & Russian, installs the extension into VLC, and offers optional one-click FFmpeg setup).*
+
+#### Option 2: 1-Click Batch Installer (Portable / Cloned Repo)
+If you cloned the repository or downloaded the ZIP:
 ```cmd
 scripts\install-windows.bat
 ```
-*(Prompts for language: English or Russian, installs the bundle into `%APPDATA%\vlc\lua\extensions\`, and checks FFmpeg).*
+*(Prompts for language: English or Russian, installs `reel-maker.lua` into `%APPDATA%\vlc\lua\extensions\`, and verifies FFmpeg).*
 
-Or build the installer wizard using Inno Setup 6:
+#### Manual Copy
+Copy `dist/reel-maker.lua` to:
 ```cmd
-iscc scripts\reel-maker.iss
+%APPDATA%\vlc\lua\extensions\reel-maker.lua
+```
+
+---
+
+### Linux
+
+Run the installation script:
+```bash
+./scripts/install.sh        # Default: English
+./scripts/install.sh ru     # Russian build
 ```
 
 Or manually copy `dist/reel-maker.lua` to:
-```
-%APPDATA%\vlc\lua\extensions\reel-maker.lua
-```
+- **Snap VLC**: `~/snap/vlc/current/.local/share/vlc/lua/extensions/`
+- **Native VLC**: `~/.local/share/vlc/lua/extensions/`
 
 ---
 
@@ -114,6 +115,31 @@ or place `ffmpeg.exe` into `%APPDATA%\vlc\bin\`.
      - `[ 🗑️ Delete ]`: Deletes selected scenes, renumbers the remaining scenes, and saves the `.scn` file. When deleting multiple scenes, click **Delete** again to confirm.
 6. **Batch Export**:
    - Click `[ 🎬 Export Cut Script ]` to create a cut script in the working directory. It includes the selected scenes, or all scenes if none are selected. The filename includes the media name and, when different, the `.scn` name (for example, `movie_highlights_cut_scenes.sh` or `.bat`).
+
+---
+
+## Development & Building from Source
+
+The modular source code is located in `src/`. Pre-compiled single-file bundles are already provided in `dist/`. If you modify code in `src/`, compile bundles using:
+
+### Linux / macOS
+```bash
+./scripts/build.sh          # Default: builds all bundles (English default)
+./scripts/build.sh ru       # Russian build only
+```
+
+### Windows (Command Prompt / PowerShell)
+```cmd
+scripts\build.bat           # Default: builds all bundles (English default)
+scripts\build.bat ru        # Russian build only
+```
+*(or directly with Lua/LuaJIT: `luajit scripts/build.lua`)*
+
+### Building Windows Setup Executable (.exe)
+Requires [Inno Setup 6](https://jrsoftware.org/isdl.php):
+```cmd
+iscc scripts\reel-maker.iss
+```
 
 ---
 

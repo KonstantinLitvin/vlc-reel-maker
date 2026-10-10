@@ -349,6 +349,31 @@ test("Platform.script_ext", function()
     assert_eq(Platform.script_ext(true), ".bat", "Windows script extension is .bat")
 end)
 
+test("Platform.format_btn preserves emojis on Linux and strips on Windows", function()
+    -- Linux: preserves rich emojis
+    assert_eq(Platform.format_btn("⏱️ Mark", false), "⏱️ Mark", "Linux keeps timer emoji")
+    assert_eq(Platform.format_btn("⏮️ To Start", false), "⏮️ To Start", "Linux keeps jump emoji")
+    assert_eq(Platform.format_btn("✂️ Cut", false), "✂️ Cut", "Linux keeps scissors emoji")
+    assert_eq(Platform.format_btn("➕ Add / Save Scene", false), "➕ Add / Save Scene", "Linux keeps plus emoji")
+    assert_eq(Platform.format_btn("📁 Set Dir", false), "📁 Set Dir", "Linux keeps folder emoji")
+
+    -- Windows: converts to clean, crisp desktop text
+    assert_eq(Platform.format_btn("⏱️ Mark", true), "Mark", "Windows strips timer emoji")
+    assert_eq(Platform.format_btn("⏮️ To Start", true), "◀ To Start", "Windows converts jump start to arrow")
+    assert_eq(Platform.format_btn("⏭️ To End", true), "To End ▶", "Windows converts jump end to arrow")
+    assert_eq(Platform.format_btn("✂️ Cut", true), "Cut", "Windows strips scissors emoji")
+    assert_eq(Platform.format_btn("➕ Add / Save Scene", true), "Add / Save Scene", "Windows strips plus emoji")
+    assert_eq(Platform.format_btn("📁 Set Dir", true), "Set Dir", "Windows strips folder emoji")
+    assert_eq(Platform.format_btn("📄 Set .scn", true), "Set .scn", "Windows strips doc emoji")
+
+    -- Russian locale tests
+    assert_eq(Platform.format_btn("⏱️ Отметить", true), "Отметить", "Windows strips timer emoji in Russian")
+    assert_eq(Platform.format_btn("⏮️ К началу", true), "◀ К началу", "Windows converts jump start in Russian")
+    assert_eq(Platform.format_btn("⏭️ К концу", true), "К концу ▶", "Windows converts jump end in Russian")
+    assert_eq(Platform.format_btn("✂️ Нарезать", true), "Нарезать", "Windows strips scissors emoji in Russian")
+    assert_eq(Platform.format_btn("➕ Добавить / Сохранить", true), "Добавить / Сохранить", "Windows strips plus in Russian")
+end)
+
 -- 5. CutterService tests
 test("CutterService.sanitize_filename", function()
     local clean = CutterService.sanitize_filename('Scene 1: "The Heist" / part *2*')
@@ -377,6 +402,7 @@ test("CutterService.generate_script (.sh and .bat)", function()
 
     local bat_script = CutterService.generate_script("C:\\media\\movie.mkv", scenes, true)
     assert_true(bat_script:find("@echo off", 1, true) ~= nil, "Windows @echo off present")
+    assert_true(bat_script:find("chcp 65001 >nul", 1, true) ~= nil, "Windows script sets UTF-8 code page")
     assert_true(bat_script:find("pause", 1, true) ~= nil, "Windows script ends with pause")
 end)
 
@@ -552,6 +578,15 @@ test("CutterService.cut_scene synchronous execution and error log capture", func
     local ok, res = CutterService.cut_scene("/tmp/non_existent_input_12345.mp4", sc, false)
     assert_true(not ok, "Cut fails gracefully when input does not exist")
     assert_true(res:find("FFmpeg failed", 1, true) ~= nil, "Error message reports failure")
+    assert_true(res:find("Log:", 1, true) ~= nil, "Log file location is reported")
+end)
+
+test("CutterService.cut_batch synchronous execution and error log capture", function()
+    local sc1 = Scene.new(1, TimeCode.from_seconds(10), TimeCode.from_seconds(20), "Scene 1")
+    local sc2 = Scene.new(2, TimeCode.from_seconds(30), TimeCode.from_seconds(40), "Scene 2")
+    local ok, res = CutterService.cut_batch("/tmp/non_existent_input_batch_12345.mp4", { sc1, sc2 }, false)
+    assert_true(not ok, "Batch cut fails gracefully when input does not exist")
+    assert_true(res:find("FFmpeg batch cut failed", 1, true) ~= nil, "Error message reports batch cut failure")
     assert_true(res:find("Log:", 1, true) ~= nil, "Log file location is reported")
 end)
 

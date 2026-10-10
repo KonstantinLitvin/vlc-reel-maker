@@ -161,7 +161,7 @@ function app:set_status(msg, level)
     end
 
     local formatted = table.concat(display_lines, "<br>")
-    local html = string.format("<div style='font-family:sans-serif; font-size:13px; margin:0; padding:0; line-height:1.35; word-wrap:break-word; color:%s;'>%s</div>", color, formatted)
+    local html = string.format("<div style='font-family:sans-serif; font-size:13px; word-wrap:break-word; color:%s;'>%s</div>", color, formatted)
 
     if self.status_box then
         self.status_box:set_text(html)
@@ -233,12 +233,13 @@ function app:update_media_display()
         end
     end
 
+    local header = Platform.format_btn(L.media_header)
     local text
     if media_name and media_name ~= "" then
         local display_name = truncate_middle(media_name, 45)
-        text = string.format("%s <span style='color:#1976d2; font-weight:bold;'>%s</span>", L.media_header, html_escape(display_name))
+        text = string.format("<span style='font-size:14px;'>%s <span style='color:#1976d2; font-weight:bold;'>%s</span></span>", header, html_escape(display_name))
     else
-        text = string.format("%s <span style='color:#777;'>%s</span>", L.media_header, L.media_none)
+        text = string.format("<span style='font-size:14px;'>%s <span style='color:#777;'>%s</span></span>", header, L.media_none)
     end
     self.media_box:set_text(text)
 end
@@ -752,36 +753,34 @@ function app:on_cut_selected()
         return
     end
 
-    local work_dir = self:get_work_dir()
-    local cut_count = 0
-    local failed = {}
-
-    for i, sc in ipairs(scenes) do
-        if #scenes > 1 then
-            self:set_status(string.format(L.status_cutting_progress, i, #scenes, sc.title))
-            if self.dlg and self.dlg.update then self.dlg:update() end
-        end
-
-        local ok, res = CutterService.cut_scene(video_path, sc, nil, work_dir)
-        if ok then
-            cut_count = cut_count + 1
-        else
-            table.insert(failed, string.format("Scene %d: %s", sc.id, tostring(res)))
-        end
+    -- Pre-flight check: verify FFmpeg binary is available before launching cuts
+    local has_ffmpeg, bin_or_err = CutterService.check_ffmpeg()
+    if not has_ffmpeg then
+        local msg = (L and L.err_ffmpeg_not_found) or bin_or_err
+        self:set_status("⚠️ " .. msg, "error")
+        return
     end
 
-    if #failed > 0 then
-        local err_summary = table.concat(failed, "\n")
-        self:set_status(string.format(L.warn_err_cut_batch, cut_count, #scenes, err_summary), "error")
-    else
-        if #scenes == 1 then
-            local sc = scenes[1]
-            local out_path = CutterService.derive_output_path(video_path, sc, work_dir)
+    local work_dir = self:get_work_dir()
+    if #scenes == 1 then
+        local sc = scenes[1]
+        local ok, res = CutterService.cut_scene(video_path, sc, nil, work_dir)
+        if ok then
+            local out_path = res
             local basename = out_path:match("([^\\/]+)$") or out_path
             self:set_status(string.format(L.status_single_cut_complete, sc.id, basename, out_path), "success")
         else
+            self:set_status(string.format(L.warn_err_cut_batch, 0, 1, res), "error")
+        end
+    else
+        self:set_status(string.format(L.status_cutting_progress, 1, #scenes, "Batch"), "info")
+
+        local ok, res = CutterService.cut_batch(video_path, scenes, nil, work_dir)
+        if ok then
             local target_dir = (work_dir and work_dir ~= "") and work_dir or (video_path:match("^(.*[\\/])") or L.fallback_work_dir)
-            self:set_status(string.format(L.status_batch_cut_complete, cut_count, target_dir), "success")
+            self:set_status(string.format(L.status_batch_cut_complete, #scenes, target_dir), "success")
+        else
+            self:set_status(string.format(L.warn_err_cut_batch, 0, #scenes, tostring(res)), "error")
         end
     end
 end
