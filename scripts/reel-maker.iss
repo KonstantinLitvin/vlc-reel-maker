@@ -62,8 +62,9 @@ Source: "..\dist\reel-maker.lua"; DestDir: "{app}"; DestName: "reel-maker.lua"; 
 
 ; App Icon
 Source: "..\assets\logo.ico"; DestDir: "{app}"; Flags: ignoreversion
-; FFmpeg installer batch script (for task)
+; FFmpeg installer batch script and PowerShell helper (for task)
 Source: "install-ffmpeg-windows.bat"; DestDir: "{tmp}"; Flags: deleteafterinstall
+Source: "download-ffmpeg.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [InstallDelete]
 ; Clean up legacy extension name

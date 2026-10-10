@@ -52,7 +52,8 @@ if defined LOCAL_FFMPEG (
     )
 )
 
-REM Option 2: Try winget
+REM Option 2: Try winget (interactive only)
+if "%NON_INTERACTIVE%"=="1" goto :try_download
 where winget.exe >nul 2>&1
 if errorlevel 1 goto :try_download
 
@@ -71,22 +72,33 @@ echo Option 3: Downloading standalone FFmpeg to %APPDATA%\vlc\bin\...
 set "TARGET_DIR=%APPDATA%\vlc\bin"
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$zip = \"$env:TEMP\ffmpeg.zip\"; " ^
-  "Write-Host 'Downloading FFmpeg release essentials...'; " ^
-  "Invoke-WebRequest -Uri 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' -OutFile $zip; " ^
-  "Write-Host 'Extracting ffmpeg.exe...'; " ^
-  "Expand-Archive -Path $zip -DestinationPath \"$env:TEMP\ffmpeg_extracted\" -Force; " ^
-  "Copy-Item \"$env:TEMP\ffmpeg_extracted\*\bin\ffmpeg.exe\" -Destination \"$env:APPDATA\vlc\bin\ffmpeg.exe\" -Force; " ^
-  "Remove-Item $zip -Force; " ^
-  "Remove-Item \"$env:TEMP\ffmpeg_extracted\" -Recurse -Force; " ^
-  "Write-Host '[OK] Installed ffmpeg.exe to $env:APPDATA\vlc\bin\ffmpeg.exe'"
+set "PS1_HELPER=%~dp0download-ffmpeg.ps1"
+if not exist "%PS1_HELPER%" set "PS1_HELPER=%~dp0..\scripts\download-ffmpeg.ps1"
+
+if exist "%PS1_HELPER%" (
+    if "%NON_INTERACTIVE%"=="1" (
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1_HELPER%" > "%TEMP%\vlc_ffmpeg_setup.log" 2>&1
+    ) else (
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1_HELPER%"
+    )
+) else (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+      "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288; " ^
+      "$u = 'https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-essentials_build.zip'; " ^
+      "$z = \"$env:TEMP\ffmpeg.zip\"; $e = \"$env:TEMP\ffmpeg_ext\"; " ^
+      "(New-Object System.Net.WebClient).DownloadFile($u, $z); " ^
+      "Expand-Archive -Path $z -DestinationPath $e -Force; " ^
+      "$b = Get-ChildItem -Path $e -Filter 'ffmpeg.exe' -Recurse | Select-Object -First 1; " ^
+      "Copy-Item $b.FullName -Destination \"$env:APPDATA\vlc\bin\ffmpeg.exe\" -Force; " ^
+      "Remove-Item $z -Force -ErrorAction SilentlyContinue; " ^
+      "Remove-Item $e -Recurse -Force -ErrorAction SilentlyContinue"
+)
 
 if exist "%APPDATA%\vlc\bin\ffmpeg.exe" (
-    echo [OK] FFmpeg setup succeeded.
+    echo [OK] FFmpeg setup succeeded: %APPDATA%\vlc\bin\ffmpeg.exe
 ) else (
-    echo [WARNING] Automatic download failed. You can manually download ffmpeg from:
-    echo https://ffmpeg.org/download.html and add it to your PATH.
+    echo [WARNING] Automatic download failed.
+    echo You can manually download ffmpeg from https://ffmpeg.org/download.html and add it to %APPDATA%\vlc\bin\
 )
 
 :done
