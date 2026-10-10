@@ -1,0 +1,44 @@
+name: Release Packaging
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release Assets
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install LuaJIT & Inno Setup
+        run: |
+          choco install luajit innosetup -y
+
+      - name: Run test suite
+        run: |
+          luajit tests/test_reel_maker.lua
+
+      - name: Build Lua bundles
+        run: |
+          luajit scripts/build.lua all
+
+      - name: Compile Inno Setup Windows installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" scripts\reel-maker.iss
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ReelMaker-Setup-*.exe
+            dist/reel-maker.lua
+            dist/reel-maker-en.lua
+            dist/reel-maker-ru.lua
+          generate_release_notes: true
