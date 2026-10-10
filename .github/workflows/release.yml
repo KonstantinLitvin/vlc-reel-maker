@@ -17,9 +17,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install LuaJIT & Inno Setup
-        run: |
-          choco install luajit innosetup -y
+      - name: Install LuaJIT
+        uses: xpol/setup-lua@v1
+        with:
+          lua-version: "luajit-2.1.0-beta3"
 
       - name: Run test suite
         run: |
