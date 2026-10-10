@@ -17,10 +17,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up MSVC environment
+        uses: step-security/msvc-dev-cmd@v1
+
       - name: Install LuaJIT
-        uses: xpol/setup-lua@v1
+        uses: leafo/gh-actions-lua@v13
         with:
-          lua-version: "luajit-2.1.0-beta3"
+          luaVersion: "luajit-2.1"
 
       - name: Run test suite
         run: |
